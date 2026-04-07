@@ -1,6 +1,10 @@
 # Cyber Ghidra WebUI
 リバースエンジニアリング用 Docker 管理ツール
 
+## UI
+
+フロントエンドは [awesome-design-md-jp / Apple Japan](https://github.com/matrix9neonebuchadnezzar2199-sketch/awesome-design-md-jp/tree/main/design-md/apple) の `DESIGN.md`（タイポグラフィ・カラー・ピル型 CTA・ナビのすりガラス）に準拠しています。
+
 ## 起動方法
 1. Windows側で start.bat を実行
 2. AMD/NVIDIA環境を選択

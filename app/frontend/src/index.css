@@ -1,34 +1,336 @@
+/*
+ * Apple Japan UI — tokens from awesome-design-md-jp / design-md/apple/DESIGN.md
+ * https://github.com/matrix9neonebuchadnezzar2199-sketch/awesome-design-md-jp
+ */
+
 :root {
-    --font-primary: 'Inter', 'Noto Sans JP', sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
-    --font-size-base: 16px;
-    --transition-normal: 0.2s ease;
-    --sidebar-width: 260px;
+  --apple-text: #1d1d1f;
+  --apple-text-secondary: rgba(0, 0, 0, 0.56);
+  --apple-bg: #fff;
+  --apple-section: #f5f5f7;
+  --apple-blue: #0071e3;
+  --apple-link: #0066cc;
+  --apple-nav-text: rgba(0, 0, 0, 0.8);
+  --apple-nav-bg: rgba(0, 0, 0, 0.8);
+  --apple-focus: 0 0 0 3px rgba(0, 113, 227, 0.2);
+  --apple-card-shadow: rgba(0, 0, 0, 0.22) 3px 5px 30px 0;
+  --apple-content-max: 1260px;
+  --font-text: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro",
+    "ヒラギノ角ゴ Pro W3", メイリオ, Meiryo, "ＭＳ Ｐゴシック", "Helvetica Neue", Helvetica,
+    Arial, sans-serif;
+  --font-display: "SF Pro JP", "SF Pro Display", "SF Pro Icons", "Hiragino Kaku Gothic Pro",
+    "ヒラギノ角ゴ Pro W3", メイリオ, Meiryo, "ＭＳ Ｐゴシック", "Helvetica Neue", Helvetica,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
-/* サイバーパンクテーマ - ダークモード (デフォルト) */
-[data-theme="cyber"][data-mode="dark"] {
-    --bg-primary: #0a1628;
-    --bg-secondary: #0d1f3c;
-    --text-primary: #ffffff;
-    --text-muted: rgba(255, 255, 255, 0.58);
-    --text-accent: #00d4ff;
-    --accent-primary: #00d4ff;
-    --glow-primary: rgba(0, 212, 255, 0.5);
-    --border-color: rgba(0, 212, 255, 0.3);
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
 }
 
 body {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    margin: 0;
-    min-height: 100vh;
-    overflow-x: hidden;
-    overflow-y: auto;
+  margin: 0;
+  min-height: 100vh;
+  background: var(--apple-bg);
+  color: var(--apple-text);
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.47;
+  letter-spacing: -0.357px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
-.neon-text {
-    text-shadow: 0 0 10px var(--glow-primary);
-    color: var(--text-accent);
+.apple-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Nav — glass (DESIGN.md §4 Navigation) */
+.apple-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 22px;
+  background: var(--apple-nav-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.apple-nav-inner {
+  width: 100%;
+  max-width: var(--apple-content-max);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.apple-nav-title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.24;
+  letter-spacing: 0.231px;
+  color: var(--apple-nav-text);
+}
+
+.apple-nav-meta {
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: normal;
+  color: var(--apple-nav-text);
+}
+
+.apple-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--apple-content-max);
+  margin: 0 auto;
+  padding: 48px 22px 80px;
+}
+
+.apple-hero {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.apple-hero-kicker {
+  font-size: 14px;
+  line-height: 1.47;
+  letter-spacing: normal;
+  color: var(--apple-text-secondary);
+  margin: 0 0 8px;
+}
+
+.apple-hero-title {
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: normal;
+  color: var(--apple-text);
+  margin: 0 0 12px;
+}
+
+@media (max-width: 833px) {
+  .apple-hero-title {
+    font-size: 28px;
+    line-height: 1.14;
+  }
+}
+
+.apple-hero-lead {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 400;
+  line-height: 1.24;
+  letter-spacing: 0.231px;
+  color: var(--apple-text-secondary);
+  max-width: 42em;
+  margin: 0 auto;
+}
+
+.apple-toolbar {
+  background: var(--apple-section);
+  border-radius: 18px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.apple-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.apple-caption {
+  font-size: 14px;
+  line-height: 1.47;
+  letter-spacing: normal;
+  color: var(--apple-text-secondary);
+  margin: 16px 0 0;
+}
+
+.apple-api-hint {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+}
+
+/* Buttons — Primary CTA pill (§4) */
+.apple-btn {
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.47;
+  letter-spacing: -0.357px;
+  cursor: pointer;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+
+.apple-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--apple-focus);
+}
+
+.apple-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.apple-btn-primary {
+  background: var(--apple-blue);
+  color: #fff;
+  border-radius: 980px;
+  padding: 8px 22px;
+}
+
+.apple-btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.apple-btn-outline {
+  background: transparent;
+  color: var(--apple-blue);
+  border: 1px solid var(--apple-blue);
+  border-radius: 980px;
+  padding: 8px 22px;
+}
+
+.apple-btn-outline:hover:not(:disabled) {
+  background: rgba(0, 113, 227, 0.06);
+}
+
+.apple-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.apple-file-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.apple-file-label.apple-btn-primary {
+  margin: 0;
+}
+
+.apple-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 833px) {
+  .apple-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.apple-panel {
+  background: var(--apple-bg);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: var(--apple-card-shadow);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  min-height: 220px;
+}
+
+.apple-panel-title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.24;
+  letter-spacing: 0.231px;
+  margin: 0 0 16px;
+  color: var(--apple-text);
+}
+
+.apple-result-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.apple-result-list li {
+  margin-bottom: 10px;
+}
+
+.apple-link {
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--apple-link);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+}
+
+.apple-link:hover {
+  text-decoration: underline;
+}
+
+.apple-meta {
+  font-size: 14px;
+  color: var(--apple-text-secondary);
+  margin-left: 8px;
+}
+
+.apple-pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(420px, 50vh);
+  overflow: auto;
+  color: var(--apple-text);
+}
+
+.apple-empty {
+  color: var(--apple-text-secondary);
+  font-size: 14px;
+}
+
+.apple-msg {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--apple-text);
+}
+
+@keyframes apple-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.apple-spin {
+  animation: apple-spin 0.9s linear infinite;
 }

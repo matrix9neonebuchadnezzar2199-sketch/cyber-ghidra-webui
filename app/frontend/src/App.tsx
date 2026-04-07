@@ -53,12 +53,12 @@ export default function App() {
         setMessage(typeof data.detail === 'string' ? data.detail : JSON.stringify(data));
       } else {
         setMessage(
-          `Accepted job ${data.job_id ?? ''}. Analysis runs in background; refresh the list shortly.`,
+          `ジョブ ${data.job_id ?? ''} を受け付けました。解析完了までしばらくお待ちください。`,
         );
         void loadResults();
       }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Upload failed');
+      setMessage(e instanceof Error ? e.message : 'アップロードに失敗しました');
     } finally {
       setBusy(false);
     }
@@ -70,158 +70,100 @@ export default function App() {
       const data = await r.json();
       setSelectedJson(JSON.stringify(data, null, 2));
     } catch {
-      setSelectedJson('Could not load result JSON.');
+      setSelectedJson('JSON を読み込めませんでした。');
     }
   };
 
   const ghidraCliFlag = health?.ghidra_cli ?? health?.ghidra;
 
   return (
-    <div style={{ padding: '2rem', maxWidth: 1100, margin: '0 auto' }}>
-      <h1 className="neon-text" style={{ fontSize: '2.25rem', textAlign: 'center' }}>
-        CYBER GHIDRA WEBUI
-      </h1>
-      <p style={{ color: 'var(--text-accent)', textAlign: 'center', marginBottom: '1.5rem' }}>
-        Headless analysis · JSON export · Local LLM hooks (Ollama / LM Studio) optional
-      </p>
-
-      <div
-        style={{
-          border: '1px solid var(--border-color)',
-          padding: '1.25rem',
-          marginBottom: '1.25rem',
-          background: 'var(--bg-secondary)',
-          borderRadius: 8,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              cursor: busy ? 'wait' : 'pointer',
-              opacity: busy ? 0.6 : 1,
-            }}
-          >
-            {busy ? <Loader2 size={18} className="spin" aria-hidden /> : <FileUp size={18} aria-hidden />}
-            <span>Select binary</span>
-            <input
-              type="file"
-              disabled={busy}
-              style={{ display: 'none' }}
-              onChange={(e) => void onUpload(e.target.files)}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              void loadResults();
-              void loadHealth();
-            }}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '8px 12px',
-              background: 'transparent',
-              border: '1px solid var(--border-color)',
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-              borderRadius: 6,
-            }}
-          >
-            <RefreshCw size={16} /> Refresh
-          </button>
-          <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-            API: {API_BASE}
+    <div className="apple-page">
+      <header className="apple-nav">
+        <div className="apple-nav-inner">
+          <span className="apple-nav-title">Cyber Ghidra</span>
+          <span className="apple-nav-meta">
+            API {API_BASE.replace(/^https?:\/\//, '')}
           </span>
         </div>
-        {message && (
-          <p style={{ marginTop: 12, color: 'var(--text-accent)', fontSize: 14 }}>{message}</p>
-        )}
-        <p style={{ marginTop: 10, fontSize: 13, color: 'var(--text-muted)' }}>
-          Backend: {health?.status ?? '…'}
-          {ghidraCliFlag !== undefined && ` · Ghidra CLI: ${ghidraCliFlag ? 'ok' : 'missing'}`}
-        </p>
-      </div>
+      </header>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: '1rem',
-        }}
-      >
-        <div
-          style={{
-            border: '1px solid var(--border-color)',
-            padding: '1rem',
-            background: 'var(--bg-secondary)',
-            borderRadius: 8,
-            minHeight: 200,
-          }}
-        >
-          <h2 style={{ fontSize: '1rem', marginBottom: 12 }}>Completed JSON</h2>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {results.map((r) => (
-              <li key={r.filename} style={{ marginBottom: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => void openResult(r.filename)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-accent)',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                    padding: 0,
-                    font: 'inherit',
-                  }}
-                >
-                  {r.filename}
-                </button>
-                <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 8 }}>
-                  {r.size} bytes · {r.created}
-                </span>
-              </li>
-            ))}
-            {results.length === 0 && (
-              <li style={{ color: 'var(--text-muted)', fontSize: 14 }}>No results yet.</li>
-            )}
-          </ul>
-        </div>
-        <div
-          style={{
-            border: '1px solid var(--border-color)',
-            padding: '1rem',
-            background: 'var(--bg-secondary)',
-            borderRadius: 8,
-            minHeight: 200,
-            overflow: 'auto',
-          }}
-        >
-          <h2 style={{ fontSize: '1rem', marginBottom: 12 }}>Preview</h2>
-          <pre
-            style={{
-              margin: 0,
-              fontSize: 12,
-              lineHeight: 1.45,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              maxHeight: 420,
-              overflow: 'auto',
-            }}
-          >
-            {selectedJson ?? 'Select a result to load JSON.'}
-          </pre>
-        </div>
-      </div>
+      <main className="apple-main">
+        <section className="apple-hero">
+          <p className="apple-hero-kicker">マルウェア解析パイプライン</p>
+          <h1 className="apple-hero-title">Cyber Ghidra WebUI</h1>
+          <p className="apple-hero-lead">
+            ヘッドレス解析・JSON 出力・ローカル LLM（Ollama / LM Studio）連携
+          </p>
+        </section>
 
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .spin { animation: spin 1s linear infinite; }
-      `}</style>
+        <section className="apple-toolbar">
+          <div className="apple-toolbar-row">
+            <label className="apple-file-label apple-btn apple-btn-primary">
+              {busy ? (
+                <Loader2 size={18} className="apple-spin" aria-hidden />
+              ) : (
+                <FileUp size={18} aria-hidden />
+              )}
+              バイナリを選択
+              <input
+                type="file"
+                className="apple-file-input"
+                disabled={busy}
+                onChange={(e) => void onUpload(e.target.files)}
+              />
+            </label>
+            <button
+              type="button"
+              className="apple-btn apple-btn-outline"
+              onClick={() => {
+                void loadResults();
+                void loadHealth();
+              }}
+            >
+              <RefreshCw size={16} aria-hidden />
+              更新
+            </button>
+          </div>
+          {message && <p className="apple-msg">{message}</p>}
+          <p className="apple-caption">
+            バックエンド: {health?.status ?? '…'}
+            {ghidraCliFlag !== undefined &&
+              ` · Ghidra CLI: ${ghidraCliFlag ? '利用可能' : '未検出'}`}
+          </p>
+        </section>
+
+        <div className="apple-grid">
+          <section className="apple-panel">
+            <h2 className="apple-panel-title">解析結果（JSON）</h2>
+            <ul className="apple-result-list">
+              {results.map((r) => (
+                <li key={r.filename}>
+                  <button
+                    type="button"
+                    className="apple-link"
+                    onClick={() => void openResult(r.filename)}
+                  >
+                    {r.filename}
+                  </button>
+                  <span className="apple-meta">
+                    {r.size} bytes · {r.created}
+                  </span>
+                </li>
+              ))}
+              {results.length === 0 && (
+                <li className="apple-empty">まだ結果がありません。</li>
+              )}
+            </ul>
+          </section>
+
+          <section className="apple-panel">
+            <h2 className="apple-panel-title">プレビュー</h2>
+            <pre className="apple-pre">
+              {selectedJson ?? '一覧から結果を選択してください。'}
+            </pre>
+          </section>
+        </div>
+      </main>
     </div>
   );
 }
