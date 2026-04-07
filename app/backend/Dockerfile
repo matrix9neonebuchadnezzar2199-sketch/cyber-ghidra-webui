@@ -1,8 +1,12 @@
-FROM python:3.11-slim-bookworm
+# Ghidra 11.3.1+ requires JRE 21. Debian bookworm apt に 21 が無い場合があるため Temurin を使用。
+FROM eclipse-temurin:21-jre-jammy AS java21
 
-# Ghidra 11.x runs on Java 17+; JRE is enough for analyzeHeadless (JDK not required).
+FROM python:3.11-slim-bookworm
+COPY --from=java21 /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jre-headless \
     wget \
     unzip \
     ca-certificates \
@@ -18,7 +22,6 @@ RUN wget -q \
     && ln -sf "/opt/ghidra_${GHIDRA_VERSION}_PUBLIC" /opt/ghidra
 
 ENV GHIDRA_HOME=/opt/ghidra
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV _JAVA_OPTIONS="-Xmx4g"
 
 WORKDIR /app
