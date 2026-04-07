@@ -10,6 +10,15 @@
 2. AMD/NVIDIA環境を選択
 3. ブラウザで http://localhost:3001 を開く
 
+### `requirements.txt` を変えたあと（`ModuleNotFoundError` 対策）
+
+バックエンドの依存は **イメージビルド時** に `/opt/venv` へ入ります。`docker-compose.yml` で `./app/backend:/app` とマウントしていても、venv はマウントで上書きされないため、**`app/backend/requirements.txt` を更新したらイメージを再ビルド**してください。
+
+```bash
+docker compose build backend
+docker compose up -d
+```
+
 ## 環境
 - GPU: Radeon 7900XT
 - CPU: 7800X3D
