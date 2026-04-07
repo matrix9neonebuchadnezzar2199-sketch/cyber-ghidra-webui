@@ -49,10 +49,10 @@ services:
       - ./output:/app/output
       - ./queue:/app/queue
       - ./scripts/ghidra:/ghidra-scripts:ro
-      - ghidra_worker_projects:/tmp/ghidra_projects
+      - ghidra_worker_projects:/workspace/ghidra_projects
     environment:
       - GHIDRA_HOME=/opt/ghidra
-      - GHIDRA_PROJECT_ROOT=/tmp/ghidra_projects
+      - GHIDRA_PROJECT_ROOT=/workspace/ghidra_projects
       - GHIDRA_TIMEOUT_SEC=600
       - WORKER_POLL_SEC=2
 

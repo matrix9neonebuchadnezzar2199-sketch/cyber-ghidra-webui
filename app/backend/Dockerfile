@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/input /app/output /app/queue/pending /app/queue/processing /app/queue/done /tmp/ghidra_projects
+RUN mkdir -p /app/input /app/output /app/queue/pending /app/queue/processing /app/queue/done /tmp/ghidra_projects /workspace/ghidra_projects
 
 EXPOSE 8000
 

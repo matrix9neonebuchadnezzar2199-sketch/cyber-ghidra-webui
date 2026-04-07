@@ -18,7 +18,7 @@ QUEUE_PROCESSING = Path("/app/queue/processing")
 QUEUE_DONE = Path("/app/queue/done")
 SCRIPT_DIR = Path("/ghidra-scripts")
 GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
-PROJECT_ROOT = Path(os.environ.get("GHIDRA_PROJECT_ROOT", "/tmp/ghidra_projects"))
+PROJECT_ROOT = Path(os.environ.get("GHIDRA_PROJECT_ROOT", "/workspace/ghidra_projects"))
 GHIDRA_TIMEOUT_SEC = int(os.environ.get("GHIDRA_TIMEOUT_SEC", "600"))
 POLL_SEC = float(os.environ.get("WORKER_POLL_SEC", "2"))
 

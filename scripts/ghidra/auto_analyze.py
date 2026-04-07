@@ -76,15 +76,6 @@ def _collect_imports(program, out):
         rows += 1
 
 
-def _collect_exports(program, out):
-    try:
-        ep = program.getEntryPoint()
-        if ep is not None:
-            out.append({"name": "entry", "address": str(ep)})
-    except Exception:
-        pass
-
-
 def run():
     monitor = TaskMonitor.DUMMY
     program = getCurrentProgram()
@@ -113,6 +104,11 @@ def run():
             result["entry_points"].append(str(addr))
     except Exception:
         pass
+
+    # Mirror entry points as exports (Program has no single getEntryPoint(); avoid bogus API)
+    result["exports"] = [
+        {"address": ep, "kind": "external_entry_point"} for ep in result["entry_points"]
+    ]
 
     decomp = DecompInterface()
     if not decomp.openProgram(program):
@@ -146,8 +142,7 @@ def run():
 
         try:
             called = func.getCalledFunctions(monitor)
-            while called.hasNext():
-                cf = called.next()
+            for cf in called:
                 nm = cf.getName()
                 if nm in SUSPICIOUS_NAMES and nm not in suspicious_seen:
                     suspicious_seen[nm] = {
@@ -165,11 +160,6 @@ def run():
 
     _collect_strings(program, result["strings"], monitor)
     _collect_imports(program, result["imports"])
-    result["exports"] = []
-    try:
-        _collect_exports(program, result["exports"])
-    except Exception:
-        pass
 
     out_name = _safe_filename(program.getName()) + "_analysis.json"
     out_path = "/app/output/" + out_name
@@ -179,3 +169,6 @@ def run():
         println("[CyberGhidra] Analysis complete: " + out_path)
     except Exception as ex:
         println("[CyberGhidra] Failed to write JSON: " + str(ex))
+
+
+run()
