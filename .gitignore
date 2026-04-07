@@ -1,0 +1,26 @@
+# Docker
+.env
+*.vhdx
+
+# Python / Node
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+
+# Large Files & Sensitive Data
+models/*
+!models/.gitkeep
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+ghidra_data/*
+!ghidra_data/.gitkeep
+backup/*
+!backup/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

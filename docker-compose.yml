@@ -1,0 +1,41 @@
+services:
+  frontend:
+    build:
+      context: ./app/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - WATCHPACK_POLLING=true
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./app/frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/backend:/app
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./scripts/ghidra:/ghidra-scripts
+      - ./models:/app/models
+    environment:
+      - GHIDRA_HOME=/opt/ghidra
+      - GHIDRA_TIMEOUT_SEC=600
+
+  ghidra-server:
+    image: blacktop/ghidra:latest
+    ports:
+      - "13100-13102:13100-13102"
+    volumes:
+      - ./ghidra_data:/repos
+    environment:
+      - GHIDRA_USERS=magi
+    restart: always

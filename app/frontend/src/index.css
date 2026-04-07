@@ -1,0 +1,34 @@
+:root {
+    --font-primary: 'Inter', 'Noto Sans JP', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-size-base: 16px;
+    --transition-normal: 0.2s ease;
+    --sidebar-width: 260px;
+}
+
+/* サイバーパンクテーマ - ダークモード (デフォルト) */
+[data-theme="cyber"][data-mode="dark"] {
+    --bg-primary: #0a1628;
+    --bg-secondary: #0d1f3c;
+    --text-primary: #ffffff;
+    --text-muted: rgba(255, 255, 255, 0.58);
+    --text-accent: #00d4ff;
+    --accent-primary: #00d4ff;
+    --glow-primary: rgba(0, 212, 255, 0.5);
+    --border-color: rgba(0, 212, 255, 0.3);
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    margin: 0;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+.neon-text {
+    text-shadow: 0 0 10px var(--glow-primary);
+    color: var(--text-accent);
+}
