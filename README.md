@@ -10,3 +10,13 @@
 - GPU: Radeon 7900XT
 - CPU: 7800X3D
 - OS: Windows 11 + WSL2 + Docker Desktop
+
+## LLM アノテーション（`POST /api/annotate/{job_id}`）
+
+- 既定の `strategy=suspicious_only` は対象関数が少なく、数分以内に完了しやすいです。
+- **`strategy=all` はデコンパイル済み関数が多いと LLM 呼び出しが連続し、数十分以上かかったり、ブラウザや curl のタイムアウトに当たることがあります。** 同期処理の安全策として、関数数が **`ANNOTATE_ALL_MAX_FUNCTIONS`（既定 100）** を超える `all` は 400 で拒否します。緩和する場合は環境変数で上限を上げるか、`top_n` を利用してください（非同期キューは Phase 2c 予定）。
+
+## スモークテスト
+
+- WSL2 / Linux: `bash scripts/smoke_test.sh`（引数省略時は `/bin/ls` のコピーを使用）
+- Windows: `powershell -File scripts/smoke_test.ps1`（アップロードに `curl.exe` を使用。プロキシが異なる環境では `Invoke-RestMethod` へ統一するなど調整してください）

@@ -22,6 +22,8 @@ GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
 
 ANALYSIS_SUFFIX = "_analysis.json"
 ANNOTATED_SUFFIX = "_annotated.json"
+# Reject strategy=all when more than this many functions (sync LLM loop; avoid client timeouts)
+ANNOTATE_ALL_MAX_FUNCTIONS = int(os.environ.get("ANNOTATE_ALL_MAX_FUNCTIONS", "100"))
 
 
 class AnnotateBody(BaseModel):
@@ -102,6 +104,29 @@ def resolve_analysis_json_path(job_id: str) -> Path:
     )
     if not candidates:
         raise HTTPException(status_code=404, detail="No analysis JSON in output")
+
+    input_fn = (st.get("filename") or "").strip()
+    if input_fn:
+        parts = input_fn.split("_", 2)
+        needles: list[str] = []
+        if len(parts) >= 3:
+            tail = parts[2]
+            needles.append(Path(tail).stem)
+            needles.append(tail)
+        needles.append(Path(input_fn).stem)
+        needles.append(input_fn)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for n in needles:
+            if n and n not in seen:
+                seen.add(n)
+                ordered.append(n)
+        for c in candidates:
+            cn = c.name
+            for n in ordered:
+                if n in cn:
+                    return c
+
     return candidates[0]
 
 
@@ -279,6 +304,16 @@ async def start_annotation(job_id: str, body: AnnotateBody = AnnotateBody()):
     targets = select_target_functions(analysis, body.strategy, body.top_n)
     if not targets:
         raise HTTPException(status_code=400, detail="No matching functions to annotate for this strategy")
+
+    if body.strategy == "all" and len(targets) > ANNOTATE_ALL_MAX_FUNCTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"strategy=all would annotate {len(targets)} functions; maximum is {ANNOTATE_ALL_MAX_FUNCTIONS} "
+                f"for synchronous processing (increase ANNOTATE_ALL_MAX_FUNCTIONS if needed, or use "
+                f"strategy=top_n / suspicious_only). Large async batches are planned for Phase 2c."
+            ),
+        )
 
     model = body.model or os.environ.get("LLM_MODEL", "llama3")
     annotate_id = str(uuid.uuid4())

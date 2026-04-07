@@ -1,6 +1,8 @@
 # smoke_test.ps1 — cyber-ghidra-webui E2E smoke (Windows)
 # Usage: .\scripts\smoke_test.ps1 [-Sample "C:\path\to\file.exe"]
 # Requires: curl.exe (Windows 10+), PowerShell 5.1+
+# Upload uses curl.exe for simple multipart; other steps use Invoke-RestMethod.
+# If corporate proxy behaves differently between the two, switch upload to the same stack or configure both.
 
 param(
     [string]$Sample = "",
