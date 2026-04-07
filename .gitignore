@@ -16,6 +16,8 @@ input/*
 !input/.gitkeep
 output/*
 !output/.gitkeep
+queue/*
+!queue/.gitkeep
 ghidra_data/*
 !ghidra_data/.gitkeep
 backup/*

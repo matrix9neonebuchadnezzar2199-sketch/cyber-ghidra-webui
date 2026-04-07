@@ -1,5 +1,6 @@
 FROM python:3.11-slim-bookworm
 
+# Ghidra 11.x runs on Java 17+; JRE is enough for analyzeHeadless (JDK not required).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jre-headless \
     wget \
@@ -30,7 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/input /app/output /tmp/ghidra_projects
+RUN mkdir -p /app/input /app/output /app/queue/pending /app/queue/processing /app/queue/done /tmp/ghidra_projects
 
 EXPOSE 8000
 

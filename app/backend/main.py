@@ -2,24 +2,22 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
+QUEUE_PENDING = Path("/app/queue/pending")
 SCRIPT_DIR = Path("/ghidra-scripts")
 GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
-PROJECT_ROOT = Path("/tmp/ghidra_projects")
 
 ANALYSIS_SUFFIX = "_analysis.json"
-GHIDRA_TIMEOUT_SEC = int(os.environ.get("GHIDRA_TIMEOUT_SEC", "600"))
 
 jobs: dict[str, dict[str, Any]] = {}
 
@@ -38,56 +36,52 @@ def analyze_headless_exists() -> bool:
     return (GHIDRA_HOME / "support" / "analyzeHeadless").is_file()
 
 
-def run_headless_analysis(filepath: Path, project_name: str, job_id: str) -> None:
-    job = jobs.get(job_id)
-    if job is not None:
-        job["status"] = "running"
-    analyze = GHIDRA_HOME / "support" / "analyzeHeadless"
-    cmd = [
-        str(analyze),
-        str(PROJECT_ROOT),
-        project_name,
-        "-import",
-        str(filepath),
-        "-postScript",
-        "auto_analyze.py",
-        "-scriptPath",
-        str(SCRIPT_DIR),
-        "-deleteProject",
-    ]
+def status_path(job_id: str) -> Path:
+    return OUTPUT_DIR / f"{job_id}.status.json"
+
+
+def write_status_atomic(job_id: str, data: dict[str, Any]) -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = status_path(job_id)
+    tmp = OUTPUT_DIR / f"{job_id}.status.json.tmp"
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def read_status_file(job_id: str) -> dict[str, Any] | None:
+    path = status_path(job_id)
+    if not path.is_file():
+        return None
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=GHIDRA_TIMEOUT_SEC,
-        )
-        if job is not None:
-            job["returncode"] = result.returncode
-            out = result.stdout or ""
-            err = result.stderr or ""
-            job["stdout_tail"] = out[-8000:]
-            job["stderr_tail"] = err[-8000:]
-            if result.returncode != 0:
-                job["status"] = "failed"
-                job["error"] = "analyzeHeadless exited with a non-zero status"
-            else:
-                job["status"] = "completed"
-    except subprocess.TimeoutExpired:
-        if job is not None:
-            job["status"] = "failed"
-            job["error"] = f"analyzeHeadless exceeded {GHIDRA_TIMEOUT_SEC}s"
-    except Exception as exc:
-        if job is not None:
-            job["status"] = "failed"
-            job["error"] = str(exc)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def load_jobs_from_disk() -> None:
+    for f in OUTPUT_DIR.glob("*.status.json"):
+        jid = f.name[: -len(".status.json")]
+        if not jid:
+            continue
+        data = read_status_file(jid)
+        if data is not None:
+            jobs[jid] = data
+
+
+def write_job_queue_atomic(job_id: str, payload: dict[str, Any]) -> None:
+    QUEUE_PENDING.mkdir(parents=True, exist_ok=True)
+    path = QUEUE_PENDING / f"{job_id}.json"
+    tmp = QUEUE_PENDING / f"{job_id}.json.tmp"
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
+    QUEUE_PENDING.mkdir(parents=True, exist_ok=True)
+    load_jobs_from_disk()
     yield
 
 
@@ -112,21 +106,14 @@ async def health_check():
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "ghidra": analyze_headless_exists(),
+        "ghidra_cli": analyze_headless_exists(),
         "ghidra_home": str(GHIDRA_HOME),
+        "queue_pending": QUEUE_PENDING.is_dir(),
     }
 
 
 @app.post("/api/upload")
-async def upload_binary(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-):
-    if not analyze_headless_exists():
-        raise HTTPException(
-            status_code=503,
-            detail="Ghidra analyzeHeadless is not available in this container",
-        )
+async def upload_binary(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
@@ -140,29 +127,67 @@ async def upload_binary(
     hashes = compute_hashes(filepath)
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    created = datetime.now().isoformat()
+
+    record: dict[str, Any] = {
+        "job_id": job_id,
         "status": "queued",
         "filename": safe_name,
         "sha256": hashes["sha256"],
-        "created": datetime.now().isoformat(),
+        "created": created,
+        "updated": created,
     }
-    background_tasks.add_task(run_headless_analysis, filepath, project_name, job_id)
+    jobs[job_id] = record
+    write_status_atomic(job_id, record)
+
+    job_payload = {
+        "job_id": job_id,
+        "filepath": str(filepath),
+        "project_name": project_name,
+        "filename": safe_name,
+        "sha256": hashes["sha256"],
+        "created": created,
+    }
+    try:
+        write_job_queue_atomic(job_id, job_payload)
+    except OSError as exc:
+        record["status"] = "failed"
+        record["error"] = f"queue write failed: {exc}"
+        record["updated"] = datetime.now().isoformat()
+        jobs[job_id] = record
+        write_status_atomic(job_id, record)
+        raise HTTPException(status_code=503, detail="Could not enqueue analysis job") from exc
 
     return {
         "status": "accepted",
         "job_id": job_id,
         "filename": safe_name,
         "hashes": hashes,
-        "message": "Analysis started in background",
+        "message": "Job queued for ghidra-worker",
     }
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    load_jobs_from_disk()
+    rows = []
+    for f in sorted(OUTPUT_DIR.glob("*.status.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        jid = f.name[: -len(".status.json")]
+        data = read_status_file(jid)
+        if data is not None:
+            rows.append(data)
+    return {"jobs": rows}
 
 
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str):
-    job = jobs.get(job_id)
-    if job is None:
+    data = read_status_file(job_id)
+    if data is None:
+        data = jobs.get(job_id)
+    if data is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    jobs[job_id] = data
+    return data
 
 
 @app.get("/api/results")
@@ -185,6 +210,11 @@ async def get_result(filename: str):
     safe = Path(filename).name
     if safe != filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
+    if safe.endswith(".status.json"):
+        raise HTTPException(
+            status_code=404,
+            detail="Not a result artifact; use GET /api/jobs/{job_id} for job status",
+        )
     filepath = (OUTPUT_DIR / safe).resolve()
     try:
         filepath.relative_to(OUTPUT_DIR.resolve())

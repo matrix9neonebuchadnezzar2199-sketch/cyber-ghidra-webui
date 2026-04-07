@@ -24,11 +24,37 @@ services:
       - ./app/backend:/app
       - ./input:/app/input
       - ./output:/app/output
+      - ./queue:/app/queue
       - ./scripts/ghidra:/ghidra-scripts
       - ./models:/app/models
     environment:
       - GHIDRA_HOME=/opt/ghidra
       - GHIDRA_TIMEOUT_SEC=600
+
+  ghidra-worker:
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+    command: ["/opt/venv/bin/python", "/app/worker.py"]
+    network_mode: "none"
+    read_only: true
+    tmpfs:
+      - /tmp:size=2G
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+      - ./queue:/app/queue
+      - ./scripts/ghidra:/ghidra-scripts:ro
+      - ghidra_worker_projects:/tmp/ghidra_projects
+    environment:
+      - GHIDRA_HOME=/opt/ghidra
+      - GHIDRA_PROJECT_ROOT=/tmp/ghidra_projects
+      - GHIDRA_TIMEOUT_SEC=600
+      - WORKER_POLL_SEC=2
 
   ghidra-server:
     image: blacktop/ghidra:latest
@@ -39,3 +65,6 @@ services:
     environment:
       - GHIDRA_USERS=magi
     restart: always
+
+volumes:
+  ghidra_worker_projects:
