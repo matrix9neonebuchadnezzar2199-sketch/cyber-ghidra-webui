@@ -8,8 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from annotator import annotate_function, select_target_functions
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
@@ -17,6 +21,14 @@ QUEUE_PENDING = Path("/app/queue/pending")
 GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
 
 ANALYSIS_SUFFIX = "_analysis.json"
+ANNOTATED_SUFFIX = "_annotated.json"
+
+
+class AnnotateBody(BaseModel):
+    strategy: str = "suspicious_only"
+    top_n: int = Field(default=50, ge=1, le=2000)
+    model: str | None = None
+    prompt_template: str | None = None
 
 
 def cors_origins() -> list[str]:
@@ -72,6 +84,25 @@ def load_jobs_from_disk() -> None:
         data = read_status_file(jid)
         if data is not None:
             jobs[jid] = data
+
+
+def resolve_analysis_json_path(job_id: str) -> Path:
+    st = read_status_file(job_id)
+    if not st or st.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Job not completed or not found")
+    name = st.get("analysis_json")
+    if name:
+        p = OUTPUT_DIR / Path(str(name)).name
+        if p.is_file():
+            return p
+    candidates = sorted(
+        OUTPUT_DIR.glob(f"*{ANALYSIS_SUFFIX}"),
+        key=lambda x: x.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No analysis JSON in output")
+    return candidates[0]
 
 
 def write_job_queue_atomic(job_id: str, payload: dict[str, Any]) -> None:
@@ -221,6 +252,11 @@ async def get_result(filename: str):
             status_code=404,
             detail="Not a result artifact; use GET /api/jobs/{job_id} for job status",
         )
+    if safe.endswith(ANNOTATED_SUFFIX):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Use GET /api/annotate/result/{{id}} for files ending with {ANNOTATED_SUFFIX}",
+        )
     filepath = (OUTPUT_DIR / safe).resolve()
     try:
         filepath.relative_to(OUTPUT_DIR.resolve())
@@ -230,6 +266,92 @@ async def get_result(filename: str):
         raise HTTPException(status_code=404, detail="Result not found")
     with open(filepath, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@app.post("/api/annotate/{job_id}")
+async def start_annotation(job_id: str, body: AnnotateBody = AnnotateBody()):
+    if body.strategy not in ("suspicious_only", "all", "top_n"):
+        raise HTTPException(status_code=400, detail="strategy must be suspicious_only, all, or top_n")
+
+    path = resolve_analysis_json_path(job_id)
+    analysis = json.loads(path.read_text(encoding="utf-8"))
+
+    targets = select_target_functions(analysis, body.strategy, body.top_n)
+    if not targets:
+        raise HTTPException(status_code=400, detail="No matching functions to annotate for this strategy")
+
+    model = body.model or os.environ.get("LLM_MODEL", "llama3")
+    annotate_id = str(uuid.uuid4())
+    annotations: list[dict[str, Any]] = []
+
+    async with httpx.AsyncClient() as client:
+        for func in targets:
+            try:
+                ann = await annotate_function(client, func, model)
+                annotations.append(ann)
+            except Exception as exc:
+                annotations.append(
+                    {
+                        "function_name": func.get("name", ""),
+                        "address": func.get("address", ""),
+                        "summary": f"LLM error: {exc}",
+                        "risk_level": "unknown",
+                        "risk_reasons": [],
+                        "ioc_candidates": [],
+                        "decompiled_c_hash": "",
+                    }
+                )
+
+    high = sum(1 for a in annotations if a.get("risk_level") == "high")
+    med = sum(1 for a in annotations if a.get("risk_level") == "medium")
+    low = sum(1 for a in annotations if a.get("risk_level") == "low")
+    ioc_count = sum(len(a.get("ioc_candidates") or []) for a in annotations)
+
+    result: dict[str, Any] = {
+        "source_job_id": job_id,
+        "annotate_id": annotate_id,
+        "model": model,
+        "strategy": body.strategy,
+        "created": datetime.now().isoformat(),
+        "annotations": annotations,
+        "summary": {
+            "total_annotated": len(annotations),
+            "high_risk": high,
+            "medium_risk": med,
+            "low_risk": low,
+            "ioc_count": ioc_count,
+        },
+    }
+
+    out_name = f"{annotate_id}{ANNOTATED_SUFFIX}"
+    out_path = OUTPUT_DIR / out_name
+    out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "status": "completed",
+        "job_id": job_id,
+        "annotate_id": annotate_id,
+        "strategy": body.strategy,
+        "target_functions": len(targets),
+        "summary": result["summary"],
+        "output_file": out_name,
+        "message": f"Saved to {out_name}; GET /api/annotate/result/{annotate_id}",
+    }
+
+
+@app.get("/api/annotate/result/{annotate_id}")
+async def get_annotation(annotate_id: str):
+    safe = Path(annotate_id).name
+    if safe != annotate_id or ".." in annotate_id:
+        raise HTTPException(status_code=400, detail="Invalid annotate_id")
+    path = (OUTPUT_DIR / f"{safe}{ANNOTATED_SUFFIX}").resolve()
+    try:
+        path.relative_to(OUTPUT_DIR.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid path") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

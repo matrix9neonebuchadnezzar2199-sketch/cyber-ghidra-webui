@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -106,6 +107,22 @@ def process_job(job_path: Path) -> None:
         }
         if result.returncode != 0:
             out["error"] = "analyzeHeadless exited with a non-zero status"
+        else:
+            combined = (result.stdout or "") + "\n" + (result.stderr or "")
+            m = re.search(r"Analysis complete:\s+(\S+\.json)", combined)
+            if m:
+                out["analysis_json"] = Path(m.group(1)).name
+            else:
+                input_mtime = filepath.stat().st_mtime
+                candidates = sorted(
+                    OUTPUT_DIR.glob("*_analysis.json"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for c in candidates:
+                    if c.stat().st_mtime >= input_mtime - 5.0:
+                        out["analysis_json"] = c.name
+                        break
         write_status(job_id, out)
     except subprocess.TimeoutExpired:
         write_status(
