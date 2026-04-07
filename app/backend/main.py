@@ -14,10 +14,16 @@ from fastapi.middleware.cors import CORSMiddleware
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
 QUEUE_PENDING = Path("/app/queue/pending")
-SCRIPT_DIR = Path("/ghidra-scripts")
 GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
 
 ANALYSIS_SUFFIX = "_analysis.json"
+
+
+def cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return ["http://localhost:3000"]
 
 jobs: dict[str, dict[str, Any]] = {}
 
@@ -89,7 +95,7 @@ app = FastAPI(title="Cyber Ghidra API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

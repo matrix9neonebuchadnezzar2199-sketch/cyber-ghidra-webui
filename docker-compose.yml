@@ -30,6 +30,7 @@ services:
     environment:
       - GHIDRA_HOME=/opt/ghidra
       - GHIDRA_TIMEOUT_SEC=600
+      - CORS_ORIGINS=http://localhost:3000
 
   ghidra-worker:
     build:

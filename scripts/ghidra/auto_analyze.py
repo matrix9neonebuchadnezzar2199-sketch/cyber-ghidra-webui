@@ -24,6 +24,9 @@ SUSPICIOUS_NAMES = frozenset([
     "CryptEncrypt", "CryptDecrypt", "RegSetValue", "CreateService",
 ])
 
+# Headless may invoke run() automatically on some Ghidra builds; trailing run() also fires — guard once.
+_run_already = False
+
 
 def _safe_filename(name):
     if name is None:
@@ -77,6 +80,11 @@ def _collect_imports(program, out):
 
 
 def run():
+    global _run_already
+    if _run_already:
+        return
+    _run_already = True
+
     monitor = TaskMonitor.DUMMY
     program = getCurrentProgram()
     if program is None:
