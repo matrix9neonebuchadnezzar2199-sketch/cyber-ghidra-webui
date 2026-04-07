@@ -36,6 +36,6 @@ goto END
 
 :END
 echo.
-echo Dashboard is starting at http://localhost:3000
+echo Dashboard is starting at http://localhost:3001
 echo Backend API is at http://localhost:8000
 pause

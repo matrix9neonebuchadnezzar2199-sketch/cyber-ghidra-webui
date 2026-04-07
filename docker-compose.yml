@@ -4,7 +4,7 @@ services:
       context: ./app/frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - WATCHPACK_POLLING=true
       - VITE_API_URL=http://localhost:8000
@@ -30,7 +30,7 @@ services:
     environment:
       - GHIDRA_HOME=/opt/ghidra
       - GHIDRA_TIMEOUT_SEC=600
-      - CORS_ORIGINS=http://localhost:3000
+      - CORS_ORIGINS=http://localhost:3001
       - LLM_API_URL=http://host.docker.internal:11434/v1
       - LLM_MODEL=llama3
       - LLM_TIMEOUT_SEC=120
