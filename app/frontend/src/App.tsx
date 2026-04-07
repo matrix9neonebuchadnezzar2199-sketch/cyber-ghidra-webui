@@ -9,7 +9,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [results, setResults] = useState<ResultRow[]>([]);
-  const [health, setHealth] = useState<{ status?: string; ghidra?: boolean } | null>(null);
+  const [health, setHealth] = useState<{
+    status?: string;
+    ghidra_cli?: boolean;
+    ghidra?: boolean;
+  } | null>(null);
   const [selectedJson, setSelectedJson] = useState<string | null>(null);
 
   const loadHealth = useCallback(async () => {
@@ -69,6 +73,8 @@ export default function App() {
       setSelectedJson('Could not load result JSON.');
     }
   };
+
+  const ghidraCliFlag = health?.ghidra_cli ?? health?.ghidra;
 
   return (
     <div style={{ padding: '2rem', maxWidth: 1100, margin: '0 auto' }}>
@@ -136,7 +142,7 @@ export default function App() {
         )}
         <p style={{ marginTop: 10, fontSize: 13, color: 'var(--text-muted)' }}>
           Backend: {health?.status ?? '…'}
-          {health?.ghidra !== undefined && ` · Ghidra CLI: ${health.ghidra ? 'ok' : 'missing'}`}
+          {ghidraCliFlag !== undefined && ` · Ghidra CLI: ${ghidraCliFlag ? 'ok' : 'missing'}`}
         </p>
       </div>
 
