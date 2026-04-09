@@ -21,11 +21,6 @@ docker compose up -d
 
 バックエンドイメージの Java は **Ghidra 11.3.1+ 向けに JDK 21**（Eclipse Temurin をマルチステージで `/opt/java/openjdk` に配置。`javac` 含む）です。
 
-## 環境
-- GPU: Radeon 7900XT
-- CPU: 7800X3D
-- OS: Windows 11 + WSL2 + Docker Desktop
-
 ## LLM アノテーション（`POST /api/annotate/{job_id}`）
 
 - 既定の `strategy=suspicious_only` は対象関数が少なく、数分以内に完了しやすいです。
