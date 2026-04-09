@@ -1,5 +1,5 @@
-# Ghidra 11.3.1+ requires JRE 21. Debian bookworm apt に 21 が無い場合があるため Temurin を使用。
-FROM eclipse-temurin:21-jre-jammy AS java21
+# Ghidra 11.3.1+ requires Java 21; LaunchSupport / analyzeHeadless need a full JDK (javac). Temurin multistage.
+FROM eclipse-temurin:21-jdk-jammy AS java21
 
 FROM python:3.11-slim-bookworm
 COPY --from=java21 /opt/java/openjdk /opt/java/openjdk

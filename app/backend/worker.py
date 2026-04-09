@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,9 @@ GHIDRA_HOME = Path(os.environ.get("GHIDRA_HOME", "/opt/ghidra"))
 PROJECT_ROOT = Path(os.environ.get("GHIDRA_PROJECT_ROOT", "/workspace/ghidra_projects"))
 GHIDRA_TIMEOUT_SEC = int(os.environ.get("GHIDRA_TIMEOUT_SEC", "600"))
 POLL_SEC = float(os.environ.get("WORKER_POLL_SEC", "2"))
+
+# auto_analyze.py prints: [CyberGhidra] PROGRESS N
+PROGRESS_RE = re.compile(r"\[CyberGhidra\]\s*PROGRESS\s+(\d+)", re.IGNORECASE)
 
 
 def write_status(job_id: str, data: dict) -> None:
@@ -72,7 +76,14 @@ def process_job(job_path: Path) -> None:
         _finish(proc_path)
         return
 
-    base = {**payload, "job_id": job_id, "status": "running", "updated": datetime.now().isoformat()}
+    base = {
+        **payload,
+        "job_id": job_id,
+        "status": "running",
+        "progress_message": "analyzeHeadless を起動しています…",
+        "progress_percent": None,
+        "updated": datetime.now().isoformat(),
+    }
     write_status(job_id, base)
 
     analyze = GHIDRA_HOME / "support" / "analyzeHeadless"
@@ -91,24 +102,85 @@ def process_job(job_path: Path) -> None:
     PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=GHIDRA_TIMEOUT_SEC,
+            bufsize=1,
         )
+        full_lines: list[str] = []
+        last_line: list[str] = [""]
+        last_progress = [None]
+
+        def drain_stdout() -> None:
+            if proc.stdout is None:
+                return
+            try:
+                for line in proc.stdout:
+                    full_lines.append(line)
+                    s = line.strip()
+                    if s:
+                        last_line[0] = s[:500]
+                    m = PROGRESS_RE.search(line)
+                    if m:
+                        try:
+                            v = int(m.group(1))
+                            last_progress[0] = max(0, min(100, v))
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+
+        reader = threading.Thread(target=drain_stdout, daemon=True)
+        reader.start()
+
+        deadline = time.monotonic() + float(GHIDRA_TIMEOUT_SEC)
+        while reader.is_alive():
+            if time.monotonic() > deadline:
+                proc.kill()
+                reader.join(timeout=30)
+                write_status(
+                    job_id,
+                    {
+                        **base,
+                        "status": "failed",
+                        "error": f"analyzeHeadless exceeded {GHIDRA_TIMEOUT_SEC}s",
+                        "progress_message": last_line[0] or "",
+                        "progress_percent": last_progress[0],
+                        "updated": datetime.now().isoformat(),
+                    },
+                )
+                return
+            write_status(
+                job_id,
+                {
+                    **base,
+                    "progress_message": last_line[0] or "Ghidra を実行中です…",
+                    "progress_percent": last_progress[0],
+                    "updated": datetime.now().isoformat(),
+                },
+            )
+            time.sleep(2.0)
+
+        reader.join(timeout=5)
+        rc = proc.wait()
+        combined = "".join(full_lines)
+
         out = {
             **base,
-            "status": "completed" if result.returncode == 0 else "failed",
-            "returncode": result.returncode,
-            "stdout_tail": (result.stdout or "")[-8000:],
-            "stderr_tail": (result.stderr or "")[-8000:],
+            "status": "completed" if rc == 0 else "failed",
+            "returncode": rc,
+            "stdout_tail": combined[-8000:],
+            "stderr_tail": "",
+            "progress_percent": 100 if rc == 0 else last_progress[0],
             "updated": datetime.now().isoformat(),
         }
-        if result.returncode != 0:
+        out.pop("progress_message", None)
+        if rc != 0:
             out["error"] = "analyzeHeadless exited with a non-zero status"
+            out["progress_message"] = last_line[0] or ""
         else:
-            combined = (result.stdout or "") + "\n" + (result.stderr or "")
             m = re.search(r"Analysis complete:\s+(\S+\.json)", combined)
             if m:
                 out["analysis_json"] = Path(m.group(1)).name
@@ -124,16 +196,6 @@ def process_job(job_path: Path) -> None:
                         out["analysis_json"] = c.name
                         break
         write_status(job_id, out)
-    except subprocess.TimeoutExpired:
-        write_status(
-            job_id,
-            {
-                **base,
-                "status": "failed",
-                "error": f"analyzeHeadless exceeded {GHIDRA_TIMEOUT_SEC}s",
-                "updated": datetime.now().isoformat(),
-            },
-        )
     except Exception as exc:
         write_status(
             job_id,

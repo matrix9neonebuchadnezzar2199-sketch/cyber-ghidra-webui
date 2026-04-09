@@ -19,7 +19,7 @@ docker compose build backend
 docker compose up -d
 ```
 
-バックエンドイメージの Java は **Ghidra 11.3.1+ 向けに JRE 21**（Eclipse Temurin をマルチステージで `/opt/java/openjdk` に配置）です。
+バックエンドイメージの Java は **Ghidra 11.3.1+ 向けに JDK 21**（Eclipse Temurin をマルチステージで `/opt/java/openjdk` に配置。`javac` 含む）です。
 
 ## 環境
 - GPU: Radeon 7900XT
