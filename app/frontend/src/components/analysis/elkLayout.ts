@@ -35,7 +35,18 @@ function toRfNodes(
 /* ------------------------------------------------------------------ */
 
 const CFG_NODE_W = 230;
-const CFG_NODE_H = 92;
+/** アドレス行 + padding（ELK ノード高さのベース） */
+const CFG_NODE_BASE_H = 40;
+/** ディスアセンブリ 1 行あたりの高さ（CfgBlockNode / ELK で揃える） */
+const CFG_NODE_LINE_H = 18;
+const CFG_NODE_MAX_LINES = 4;
+
+function cfgNodeElkHeight(n: CfgNode): number {
+  const rawLen = n.disasm?.length ?? 0;
+  const linesForSizing = rawLen > 0 ? rawLen : n.preview ? 1 : 0;
+  const lineCount = Math.min(Math.max(linesForSizing, 1), CFG_NODE_MAX_LINES);
+  return CFG_NODE_BASE_H + CFG_NODE_LINE_H * lineCount;
+}
 
 export async function layoutCfgElk(cfg: CfgData, heavy: boolean): Promise<LayoutResult> {
   if (!cfg.nodes.length) return { nodes: [], edges: [] };
@@ -59,7 +70,7 @@ export async function layoutCfgElk(cfg: CfgData, heavy: boolean): Promise<Layout
     children: cfg.nodes.map((n) => ({
       id: n.id,
       width: CFG_NODE_W,
-      height: CFG_NODE_H,
+      height: cfgNodeElkHeight(n),
     })),
     edges: cfg.edges.map((e, i) => ({
       id: 'e-' + String(i),
@@ -96,45 +107,12 @@ export async function layoutCfgElk(cfg: CfgData, heavy: boolean): Promise<Layout
     const isBack = tgtY < srcY;
     const dir = e.branch_dir ?? 'none';
 
-    let stroke = 'rgba(0, 200, 255, 0.42)';
-    let strokeWidth = 1.25;
-    let dashArray: string | undefined;
-
-    if (isBack) {
-      stroke = 'rgba(255, 160, 60, 0.75)';
-      strokeWidth = 2.2;
-      dashArray = '6 4';
-    } else if (dir === 'true') {
-      stroke = 'rgba(50, 215, 75, 0.75)';
-      strokeWidth = 2;
-    } else if (dir === 'false') {
-      stroke = 'rgba(255, 69, 58, 0.7)';
-      strokeWidth = 2;
-    } else if (dir === 'fallthrough') {
-      stroke = 'rgba(180, 180, 200, 0.5)';
-      strokeWidth = 1.5;
-    } else if (dir === 'call') {
-      stroke = 'rgba(167, 139, 250, 0.6)';
-      strokeWidth = 1.5;
-      dashArray = '4 3';
-    }
-
-    if (heavy) {
-      return {
-        id: `${e.from}->${e.to}-${i}`,
-        source: e.from,
-        target: e.to,
-        type: 'smoothstep',
-        style: { stroke, strokeWidth, strokeDasharray: dashArray },
-      };
-    }
-
     return {
       id: `${e.from}->${e.to}-${i}`,
       source: e.from,
       target: e.to,
       type: 'cyber',
-      label: e.label,
+      label: heavy ? undefined : e.label,
       data: { kind: e.kind, isBack, branchDir: dir },
     };
   });

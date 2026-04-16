@@ -1,4 +1,5 @@
 import type { CallGraphData, CfgData } from '../../types/analysis';
+import { CYBER_BLUR_ID, CYBER_GRAD_ID } from './CyberFlowEdge';
 
 /* ------------------------------------------------------------------ */
 /*  DOT (Graphviz) export                                              */
@@ -58,6 +59,56 @@ export function callGraphToDot(graph: CallGraphData): string {
 /*  SVG capture from React Flow viewport                               */
 /* ------------------------------------------------------------------ */
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** FlowGraphView の CyberFlowDefs と同一（クローン SVG に defs が無い場合の注入用） */
+function injectCyberFlowDefs(svg: SVGSVGElement): void {
+  if (svg.getElementById(CYBER_GRAD_ID)) return;
+
+  const defs = document.createElementNS(SVG_NS, 'defs');
+
+  const grad = document.createElementNS(SVG_NS, 'linearGradient');
+  grad.setAttribute('id', CYBER_GRAD_ID);
+  grad.setAttribute('x1', '0%');
+  grad.setAttribute('y1', '0%');
+  grad.setAttribute('x2', '100%');
+  grad.setAttribute('y2', '0%');
+  const stops = [
+    ['0%', '#00f3ff'],
+    ['45%', '#c56bff'],
+    ['100%', '#ff2a6d'],
+  ] as const;
+  for (const [offset, stopColor] of stops) {
+    const stop = document.createElementNS(SVG_NS, 'stop');
+    stop.setAttribute('offset', offset);
+    stop.setAttribute('stop-color', stopColor);
+    grad.appendChild(stop);
+  }
+  defs.appendChild(grad);
+
+  const filter = document.createElementNS(SVG_NS, 'filter');
+  filter.setAttribute('id', CYBER_BLUR_ID);
+  filter.setAttribute('x', '-60%');
+  filter.setAttribute('y', '-60%');
+  filter.setAttribute('width', '220%');
+  filter.setAttribute('height', '220%');
+  const blur = document.createElementNS(SVG_NS, 'feGaussianBlur');
+  blur.setAttribute('stdDeviation', '3.5');
+  blur.setAttribute('result', 'b');
+  const merge = document.createElementNS(SVG_NS, 'feMerge');
+  const mn1 = document.createElementNS(SVG_NS, 'feMergeNode');
+  mn1.setAttribute('in', 'b');
+  const mn2 = document.createElementNS(SVG_NS, 'feMergeNode');
+  mn2.setAttribute('in', 'SourceGraphic');
+  merge.appendChild(mn1);
+  merge.appendChild(mn2);
+  filter.appendChild(blur);
+  filter.appendChild(merge);
+  defs.appendChild(filter);
+
+  svg.insertBefore(defs, svg.firstChild);
+}
+
 export function captureFlowSvg(): string | null {
   const vp = document.querySelector('.react-flow__viewport');
   const raw = vp?.closest('svg') ?? document.querySelector('.react-flow svg');
@@ -65,6 +116,7 @@ export function captureFlowSvg(): string | null {
   const svgEl = raw;
 
   const clone = svgEl.cloneNode(true) as SVGSVGElement;
+  injectCyberFlowDefs(clone);
   clone.style.backgroundColor = '#07050f';
   try {
     const bbox = svgEl.getBBox();
