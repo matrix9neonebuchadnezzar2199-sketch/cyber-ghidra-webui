@@ -394,6 +394,31 @@ def _edge_label(program, src_block, ref, monitor):
     return name
 
 
+def _resolve_conditional_dir(cb, dest_addr, monitor):
+    """条件分岐ブロックの出力先を列挙し、true(ジャンプ先)/false(フォールスルー先)を判定。"""
+    if dest_addr is None:
+        return "conditional"
+    try:
+        fall_addr = cb.getFallThrough()
+        if fall_addr is not None:
+            if dest_addr.equals(fall_addr):
+                return "false"
+            else:
+                return "true"
+    except Exception:
+        pass
+    try:
+        max_addr = cb.getMaxAddress()
+        fall_candidate = max_addr.add(1)
+        if dest_addr.equals(fall_candidate):
+            return "false"
+        else:
+            return "true"
+    except Exception:
+        pass
+    return "conditional"
+
+
 def _build_cfg(program, func, monitor):
     """Control-flow graph: basic blocks + edges with branch hints (IDA-style data)."""
     from ghidra.program.model.block import SimpleBlockModel
@@ -492,23 +517,28 @@ def _build_cfg(program, func, monitor):
 
             branch_dir = "none"
             try:
-                if ft is not None and ft.isConditional():
-                    fall_addr = cb.getFallThrough()
-                    if fall_addr is not None and dest_addr is not None:
-                        if dest_addr.equals(fall_addr):
-                            branch_dir = "false"
-                        else:
-                            branch_dir = "true"
-                    else:
-                        branch_dir = "conditional"
-                elif ft is not None and ft.isFallthrough():
-                    branch_dir = "fallthrough"
-                elif ft is not None and ft.isCall():
-                    branch_dir = "call"
-                elif ft is not None and ft.isJump() and not ft.isConditional():
-                    branch_dir = "unconditional"
+                if ft is not None:
+                    if ft.isCall():
+                        branch_dir = "call"
+                    elif ft.isFallthrough() and not ft.isConditional():
+                        branch_dir = "fallthrough"
+                    elif ft.isConditional():
+                        branch_dir = _resolve_conditional_dir(cb, dest_addr, monitor)
+                    elif ft.isJump():
+                        branch_dir = "unconditional"
             except Exception:
                 pass
+
+            if branch_dir == "none":
+                kind_upper = kind.upper()
+                if "CONDITIONAL" in kind_upper:
+                    branch_dir = "conditional"
+                elif "CALL" in kind_upper:
+                    branch_dir = "call"
+                elif "FALL" in kind_upper:
+                    branch_dir = "fallthrough"
+                elif "UNCONDITIONAL" in kind_upper or "JUMP" in kind_upper:
+                    branch_dir = "unconditional"
 
             label = _edge_label(program, cb, ref, monitor)
             edges.append({

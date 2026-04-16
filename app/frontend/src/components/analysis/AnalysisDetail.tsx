@@ -241,29 +241,39 @@ export function AnalysisDetail({
 
         {tab === 'flow' && (
           <div className="apple-adetail-pane apple-adetail-pane--flow">
-            <p className="apple-flow-ida-lead">
-              IDA に近い運用: <strong>コールグラフ</strong>で全体を把握し、必要なら
-              <strong>関数内 CFG</strong>へ。ブレッドクラムと「← 戻る」でビューを切り替えます。
-            </p>
-
             <div className="cyber-flow-breadcrumb">
               {flowNav.canGoBack && (
                 <button type="button" className="cyber-flow-breadcrumb-back" onClick={flowNav.goBack}>
                   ← 戻る
                 </button>
               )}
-              {flowNav.breadcrumbs.map((bc, i) => (
-                <span key={i} className="cyber-flow-breadcrumb-item">
-                  {i > 0 && <span className="cyber-flow-breadcrumb-sep"> › </span>}
-                  {bc.type === 'callgraph'
+              {flowNav.breadcrumbs.map((bc, i) => {
+                const isLast = i === flowNav.breadcrumbs.length - 1;
+                const label =
+                  bc.type === 'callgraph'
                     ? 'コールグラフ'
-                    : bc.functionName ?? bc.functionAddress ?? 'CFG'}
-                </span>
-              ))}
+                    : bc.functionName ?? bc.functionAddress ?? 'CFG';
+                return (
+                  <span
+                    key={i}
+                    className={`cyber-flow-breadcrumb-item${isLast ? ' cyber-flow-breadcrumb-item--current' : ''}`}
+                  >
+                    {i > 0 && <span className="cyber-flow-breadcrumb-sep"> › </span>}
+                    {label}
+                  </span>
+                );
+              })}
             </div>
 
             {flowNav.current.type === 'callgraph' && (
               <>
+                <div className="cyber-flow-view-header">
+                  <h3 className="cyber-flow-view-title">コールグラフ</h3>
+                  <p className="cyber-flow-view-desc">
+                    プログラム全体の関数呼び出し関係です。ノードをダブルクリックすると、その関数内の分岐構造（CFG）に遷移します。
+                  </p>
+                </div>
+
                 <div className="cyber-flow-controls-bar">
                   <input
                     type="search"
@@ -295,6 +305,11 @@ export function AnalysisDetail({
                       <option value={5}>5段</option>
                     </select>
                   </label>
+                  {cgDepth >= 0 && !cgFocusAddr && (
+                    <span className="cyber-flow-depth-hint">
+                      ノードをクリックすると、そのノードを中心に表示を絞り込みます
+                    </span>
+                  )}
                   {cgFocusAddr && (
                     <button
                       type="button"
@@ -336,6 +351,16 @@ export function AnalysisDetail({
 
             {flowNav.current.type === 'cfg' && (
               <>
+                <div className="cyber-flow-view-header">
+                  <h3 className="cyber-flow-view-title">
+                    関数内 CFG: {fn?.name ?? '未選択'}
+                  </h3>
+                  <p className="cyber-flow-view-desc">
+                    この関数内の if / else / ループの分岐構造です。
+                    緑＝条件成立、赤＝条件不成立、オレンジ破線＝ループバック、紫破線＝関数呼び出し。
+                  </p>
+                </div>
+
                 <div className="cyber-flow-controls-bar cyber-flow-controls-bar--cfg">
                   <FlowLegend />
                   <FlowExportMenu cfg={fn?.cfg} funcName={fn?.name} />
@@ -353,7 +378,9 @@ export function AnalysisDetail({
                     </p>
                   )
                 ) : (
-                  <p className="apple-adetail-hint">左のツリーから関数を選択してください。</p>
+                  <p className="apple-adetail-hint">
+                    コールグラフでノードをダブルクリックするか、左のツリーから関数を選択してください。
+                  </p>
                 )}
               </>
             )}

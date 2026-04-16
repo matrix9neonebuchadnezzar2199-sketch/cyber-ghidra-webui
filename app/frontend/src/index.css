@@ -1859,6 +1859,39 @@ body {
   background: rgba(255, 159, 10, 0.2);
 }
 
+/* Flow view header (F2) */
+.cyber-flow-view-header {
+  margin-bottom: 12px;
+}
+
+.cyber-flow-view-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: var(--apple-text);
+}
+
+.cyber-flow-view-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--apple-text-secondary);
+}
+
+/* Breadcrumb current item */
+.cyber-flow-breadcrumb-item--current {
+  font-weight: 600;
+  color: #7aefff;
+}
+
+/* Depth hint */
+.cyber-flow-depth-hint {
+  font-size: 11px;
+  color: var(--apple-text-secondary);
+  margin-left: 4px;
+}
+
 .apple-decomp-row--clickable {
   cursor: pointer;
   transition: background 0.15s ease;
