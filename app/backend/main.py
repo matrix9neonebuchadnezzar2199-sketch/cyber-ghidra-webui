@@ -19,7 +19,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from annotator import annotate_function, select_target_functions
-from packer_detect import quick_packer_heuristic
+from packer_detect import is_pe_file, quick_packer_heuristic
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
@@ -38,6 +38,7 @@ EXTRACT_TMPDIR = Path("/tmp/extract")
 UNIPACKER_URL = os.environ.get("UNIPACKER_URL", "http://unipacker-worker:8001").rstrip("/")
 AUTO_UNPACK = os.environ.get("AUTO_UNPACK", "1").strip().lower() in ("1", "true", "yes")
 UNPACK_TIMEOUT_SEC = int(os.environ.get("UNPACK_TIMEOUT_SEC", "300"))
+UNPACK_MAX_LAYERS = int(os.environ.get("UNPACK_MAX_LAYERS", "3"))
 
 
 class AnnotateBody(BaseModel):
@@ -259,10 +260,9 @@ def _extract_archive(
 
 async def _try_unpack(filepath: Path) -> dict[str, Any]:
     """
-    Check if file is a packed PE and attempt unpacking via unipacker-worker.
-    Returns:
-      {"unpacked": True, "unpacked_path": Path, "packer_name": str, "original_sha256": str, ...}
-      or {"unpacked": False, "reason": str, "remote_attempted": bool}
+    Check if file is a packed PE and attempt multi-layer unpacking via unipacker-worker.
+    Returns dict with unpacked, unpacked_path, packer_chain, total_layers,
+    original_sha256, reason, remote_attempted, etc.
     """
     result: dict[str, Any] = {
         "unpacked": False,
@@ -273,17 +273,19 @@ async def _try_unpack(filepath: Path) -> dict[str, Any]:
         result["reason"] = "auto_unpack_disabled"
         return result
 
-    hint = quick_packer_heuristic(filepath)
-    if not hint["is_pe"]:
+    if not is_pe_file(filepath):
         result["reason"] = "not_pe"
         return result
+    hint = quick_packer_heuristic(filepath)
     if not hint["likely_packed"]:
         result["reason"] = "not_packed"
         return result
 
     result["remote_attempted"] = True
     try:
-        timeout = httpx.Timeout(UNPACK_TIMEOUT_SEC, connect=30.0)
+        # One HTTP round-trip may run up to UNPACK_MAX_LAYERS sequential emulator timeouts.
+        wall = float(UNPACK_TIMEOUT_SEC) * float(max(1, UNPACK_MAX_LAYERS)) + 60.0
+        timeout = httpx.Timeout(wall, connect=30.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             with open(filepath, "rb") as fh:
                 resp = await client.post(
@@ -301,20 +303,32 @@ async def _try_unpack(filepath: Path) -> dict[str, Any]:
                 body = resp.json()
                 result["reason"] = str(body.get("reason", "unknown"))
                 result["message"] = str(body.get("message", ""))
+                try:
+                    result["total_layers"] = int(body.get("total_layers", 0) or 0)
+                except (TypeError, ValueError):
+                    result["total_layers"] = 0
                 return result
 
             unpacked_data = resp.content
-            packer_name = resp.headers.get("x-packer-name", "unknown")
+            packer_chain = resp.headers.get("x-packer-chain", "unknown")
+            raw_tl = resp.headers.get("x-total-layers", "1")
+            try:
+                total_layers = int(raw_tl)
+            except ValueError:
+                total_layers = 1
             unpacked_sha = resp.headers.get("x-unpacked-sha256", "")
             original_sha = resp.headers.get("x-original-sha256", "")
+            unpack_reason = resp.headers.get("x-unpack-reason", "completed")
 
             unpacked_path = filepath.parent / ("unpacked_%s" % filepath.name)
             unpacked_path.write_bytes(unpacked_data)
             result["unpacked"] = True
             result["unpacked_path"] = unpacked_path
-            result["packer_name"] = packer_name
+            result["packer_chain"] = packer_chain
+            result["total_layers"] = total_layers
             result["original_sha256"] = original_sha
             result["unpacked_sha256"] = unpacked_sha
+            result["reason"] = unpack_reason
             return result
     except Exception as exc:
         result["reason"] = "unpack_error: %s" % exc
@@ -349,8 +363,12 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         counter += 1
     # tmpfs → input はクロスデバイスのため shutil.move（rename 不可の場合がある）
     shutil.move(str(analysis_target), str(dest))
-    if unpack_info.get("unpacked") and src != analysis_target and src.is_file():
-        src.unlink(missing_ok=True)
+    if unpack_info.get("unpacked") and analysis_target != src:
+        try:
+            if src.is_file():
+                src.unlink()
+        except OSError:
+            pass
 
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
@@ -366,8 +384,10 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "unpack_info": {
             "attempted": bool(unpack_info.get("remote_attempted")),
             "unpacked": bool(unpack_info.get("unpacked")),
-            "packer_name": str(unpack_info.get("packer_name", "")),
+            "packer_chain": str(unpack_info.get("packer_chain", "")),
+            "total_layers": int(unpack_info.get("total_layers", 0) or 0),
             "original_sha256": str(unpack_info.get("original_sha256", "")),
+            "reason": str(unpack_info.get("reason", "")),
         },
     }
     jobs[job_id] = record
@@ -573,8 +593,10 @@ async def upload_binary(
         "unpack_info": {
             "attempted": bool(unpack_info.get("remote_attempted")),
             "unpacked": bool(unpack_info.get("unpacked")),
-            "packer_name": str(unpack_info.get("packer_name", "")),
+            "packer_chain": str(unpack_info.get("packer_chain", "")),
+            "total_layers": int(unpack_info.get("total_layers", 0) or 0),
             "original_sha256": str(unpack_info.get("original_sha256", "")),
+            "reason": str(unpack_info.get("reason", "")),
         },
     }
     jobs[job_id] = record
@@ -599,8 +621,12 @@ async def upload_binary(
         write_status_atomic(job_id, record)
         raise HTTPException(status_code=503, detail="Could not enqueue analysis job") from exc
 
-    if unpack_info.get("unpacked") and filepath.is_file() and analysis_target != filepath:
-        filepath.unlink(missing_ok=True)
+    if unpack_info.get("unpacked") and analysis_target != filepath:
+        try:
+            if filepath.is_file():
+                filepath.unlink()
+        except OSError:
+            pass
 
     return {
         "status": "accepted",
@@ -609,7 +635,11 @@ async def upload_binary(
         "hashes": hashes,
         "unpack_info": record["unpack_info"],
         "message": (
-            "Unpacked (%s) → Ghidra analysis queued" % unpack_info.get("packer_name", "?")
+            "Unpacked %d layer(s) [%s] → Ghidra analysis queued"
+            % (
+                int(unpack_info.get("total_layers", 0) or 0),
+                unpack_info.get("packer_chain", "?"),
+            )
             if unpack_info.get("unpacked")
             else "Job queued for ghidra-worker"
         ),

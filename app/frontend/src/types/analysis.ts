@@ -137,6 +137,8 @@ export type AnalysisJson = {
 export type UnpackInfo = {
   attempted: boolean;
   unpacked: boolean;
-  packer_name: string;
+  packer_chain: string;
+  total_layers: number;
   original_sha256: string;
+  reason: string;
 };

@@ -48,6 +48,7 @@ services:
     environment:
       - UNPACK_TIMEOUT_SEC=300
       - UNPACK_MAX_SIZE_MB=200
+      - UNPACK_MAX_LAYERS=3
     expose:
       - "8001"
     healthcheck:

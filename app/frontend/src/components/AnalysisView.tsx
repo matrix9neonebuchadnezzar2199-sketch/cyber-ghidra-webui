@@ -19,8 +19,12 @@ type JobStatus = {
   unpack_info?: {
     attempted?: boolean;
     unpacked?: boolean;
+    packer_chain?: string;
+    /** 旧 status.json 互換 */
     packer_name?: string;
+    total_layers?: number;
     original_sha256?: string;
+    reason?: string;
   };
 };
 
@@ -290,7 +294,17 @@ export function AnalysisView() {
               <div className="apple-unpack-badge" role="status">
                 {jobSnapshot.unpack_info.unpacked ? (
                   <span className="apple-unpack-badge--success">
-                    ✓ アンパック済み（{jobSnapshot.unpack_info.packer_name || '?'}）
+                    ✓ アンパック済み
+                    {(() => {
+                      const chain =
+                        jobSnapshot.unpack_info.packer_chain ||
+                        jobSnapshot.unpack_info.packer_name ||
+                        '?';
+                      const layers = jobSnapshot.unpack_info.total_layers;
+                      return layers != null && layers > 1
+                        ? `（${layers}層: ${chain}）`
+                        : `（${chain}）`;
+                    })()}
                   </span>
                 ) : (
                   <span className="apple-unpack-badge--skip">

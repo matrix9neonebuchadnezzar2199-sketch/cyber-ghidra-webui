@@ -1,6 +1,7 @@
 """
 Unipacker HTTP microservice.
 Receives a packed PE, runs emulation-based unpacking, returns the unpacked PE.
+Supports multi-layer unpacking (re-detect after each pass).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from fastapi.responses import JSONResponse, Response
 
 UNPACK_TIMEOUT = int(os.environ.get("UNPACK_TIMEOUT_SEC", "300"))
 UNPACK_MAX_SIZE_MB = int(os.environ.get("UNPACK_MAX_SIZE_MB", "200"))
+UNPACK_MAX_LAYERS = int(os.environ.get("UNPACK_MAX_LAYERS", "3"))
 WORK_DIR = Path("/tmp/unipacker_work")
 
 app = FastAPI(title="Unipacker Worker")
@@ -40,7 +42,7 @@ def _detect_packer_simple(pe_path: Path) -> dict[str, Any]:
     try:
         pe = pefile.PE(str(pe_path), fast_load=True)
     except Exception as exc:
-        result["details"] = f"pefile parse error: {exc}"
+        result["details"] = "pefile parse error: %s" % exc
         return result
 
     section_info = []
@@ -95,15 +97,15 @@ def _detect_packer_simple(pe_path: Path) -> dict[str, Any]:
         if sn_clean in known_packer_sections:
             result["packed"] = True
             result["packer_name"] = known_packer_sections[sn_clean]
-            result["details"] = f"Known packer section: {sn_clean}"
+            result["details"] = "Known packer section: %s" % sn_clean
             break
 
     if not result["packed"] and suspicious_count >= 2:
         result["packed"] = True
         result["packer_name"] = "unknown"
         result["details"] = (
-            f"Heuristic: {suspicious_count} suspicious section(s) "
-            f"(high entropy / large virtual-to-raw ratio)"
+            "Heuristic: %d suspicious section(s) "
+            "(high entropy / large virtual-to-raw ratio)" % suspicious_count
         )
 
     try:
@@ -113,7 +115,7 @@ def _detect_packer_simple(pe_path: Path) -> dict[str, Any]:
     return result
 
 
-def _run_unipacker(input_path: Path, output_dir: Path) -> Path | None:
+def _run_unipacker_once(input_path: Path, output_dir: Path) -> Path | None:
     """Run unipacker on the input PE. Returns path to unpacked file or None."""
     script = Path(__file__).resolve().parent / "run_unpack.py"
     try:
@@ -131,15 +133,100 @@ def _run_unipacker(input_path: Path, output_dir: Path) -> Path | None:
         traceback.print_exc()
         return None
 
-    dest = output_dir / f"unpacked_{input_path.name}"
+    dest = output_dir / ("unpacked_%s" % input_path.name)
     if dest.is_file() and dest.stat().st_size > 0:
         return dest
     return None
 
 
+def _run_unipacker_multilayer(
+    input_path: Path,
+    work_dir: Path,
+    max_layers: int,
+) -> dict[str, Any]:
+    """
+    Repeatedly detect → unpack until the output is no longer packed
+    or max_layers is reached.
+    """
+    original_sha256 = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    layers: list[dict[str, Any]] = []
+    current_path = input_path
+    seen_hashes: set[str] = {original_sha256}
+
+    for i in range(1, max_layers + 1):
+        detection = _detect_packer_simple(current_path)
+        if not detection["packed"]:
+            reason = "completed" if layers else "not_packed"
+            return {
+                "unpacked": bool(layers),
+                "layers": layers,
+                "total_layers": len(layers),
+                "final_path": current_path if layers else None,
+                "final_sha256": hashlib.sha256(current_path.read_bytes()).hexdigest(),
+                "original_sha256": original_sha256,
+                "reason": reason,
+            }
+
+        layer_dir = work_dir / ("layer_%d" % i)
+        layer_dir.mkdir(parents=True, exist_ok=True)
+
+        unpacked = _run_unipacker_once(current_path, layer_dir)
+        if unpacked is None or not unpacked.is_file():
+            return {
+                "unpacked": bool(layers),
+                "layers": layers,
+                "total_layers": len(layers),
+                "final_path": current_path if layers else None,
+                "final_sha256": hashlib.sha256(current_path.read_bytes()).hexdigest(),
+                "original_sha256": original_sha256,
+                "reason": "unpack_failed_at_layer_%d" % i,
+            }
+
+        unpacked_sha = hashlib.sha256(unpacked.read_bytes()).hexdigest()
+
+        if unpacked_sha in seen_hashes:
+            return {
+                "unpacked": bool(layers),
+                "layers": layers,
+                "total_layers": len(layers),
+                "final_path": current_path if layers else None,
+                "final_sha256": hashlib.sha256(current_path.read_bytes()).hexdigest(),
+                "original_sha256": original_sha256,
+                "reason": "hash_cycle_at_layer_%d" % i,
+            }
+        seen_hashes.add(unpacked_sha)
+
+        input_sha = hashlib.sha256(current_path.read_bytes()).hexdigest()
+        layers.append(
+            {
+                "layer": i,
+                "packer_name": detection.get("packer_name", "unknown"),
+                "input_sha256": input_sha,
+                "output_sha256": unpacked_sha,
+            }
+        )
+
+        current_path = unpacked
+
+    final_detection = _detect_packer_simple(current_path)
+    return {
+        "unpacked": True,
+        "layers": layers,
+        "total_layers": len(layers),
+        "final_path": current_path,
+        "final_sha256": hashlib.sha256(current_path.read_bytes()).hexdigest(),
+        "original_sha256": original_sha256,
+        "reason": "max_layers" if final_detection["packed"] else "completed",
+    }
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "unipacker-worker"}
+    return {
+        "status": "ok",
+        "service": "unipacker-worker",
+        "max_layers": UNPACK_MAX_LAYERS,
+    }
 
 
 @app.post("/detect")
@@ -169,8 +256,9 @@ async def detect_packer(file: UploadFile = File(...)):
 @app.post("/unpack")
 async def unpack_binary(file: UploadFile = File(...)):
     """
-    Unpack a packed PE binary using unipacker emulation.
-    Returns the unpacked PE file as download, or JSON error.
+    Unpack a packed PE binary using multi-layer emulation.
+    Returns the unpacked PE file as download + layer metadata in headers,
+    or JSON if not packed / failed.
     """
     if not file.filename:
         raise HTTPException(400, "missing filename")
@@ -184,42 +272,36 @@ async def unpack_binary(file: UploadFile = File(...)):
             raise HTTPException(413, "file too large")
         input_path.write_bytes(data)
 
-        detection = _detect_packer_simple(input_path)
-        if not detection["packed"]:
+        result = _run_unipacker_multilayer(input_path, work, UNPACK_MAX_LAYERS)
+
+        if not result["unpacked"] or result["final_path"] is None:
             return JSONResponse(
                 status_code=200,
                 content={
                     "unpacked": False,
-                    "reason": "not_packed",
-                    "detection": detection,
-                    "message": "File does not appear to be packed",
+                    "reason": result["reason"],
+                    "layers": result["layers"],
+                    "total_layers": result["total_layers"],
+                    "message": "Unpacking did not produce a result",
                 },
             )
 
-        unpacked_path = _run_unipacker(input_path, work)
-        if unpacked_path is None or not unpacked_path.is_file():
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "unpacked": False,
-                    "reason": "unpack_failed",
-                    "detection": detection,
-                    "message": "Unipacker could not extract the original binary",
-                },
-            )
+        final_path: Path = result["final_path"]
+        file_data = final_path.read_bytes()
 
-        file_data = unpacked_path.read_bytes()
-        unpacked_hash = hashlib.sha256(file_data).hexdigest()
-        orig_hash = hashlib.sha256(data).hexdigest()
+        packer_chain = " → ".join(layer["packer_name"] for layer in result["layers"])
+
         return Response(
             content=file_data,
             media_type="application/octet-stream",
             headers={
-                "Content-Disposition": f'attachment; filename="unpacked_{file.filename}"',
+                "Content-Disposition": 'attachment; filename="unpacked_%s"' % file.filename,
                 "X-Unpacked": "true",
-                "X-Packer-Name": str(detection.get("packer_name", "unknown")),
-                "X-Unpacked-SHA256": unpacked_hash,
-                "X-Original-SHA256": orig_hash,
+                "X-Packer-Chain": packer_chain,
+                "X-Total-Layers": str(result["total_layers"]),
+                "X-Unpacked-SHA256": result["final_sha256"],
+                "X-Original-SHA256": result["original_sha256"],
+                "X-Unpack-Reason": result["reason"],
             },
         )
     except HTTPException:
