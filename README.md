@@ -52,6 +52,16 @@ docker compose up -d
 |---|---|---|
 | `MAX_EXTRACT_SIZE_MB` | `500` | 展開後の合計サイズ上限（MB） |
 
+### 検体ファイルの隔離
+
+アップロードされたバイナリ（アーカイブから展開されたものを含む）は Docker の名前付きボリューム `cyber_input` に保存されます。ホスト側のファイルエクスプローラーには表示されないため、ウイルス対策ソフトによる誤検知や誤実行のリスクがありません。
+
+- 解析完了後、ghidra-worker がボリューム内のバイナリを自動削除します
+- ボリュームを手動でクリアする場合: `docker volume rm cyber-ghidra-webui-main_cyber_input`
+- ボリュームの中身を確認する場合: `docker run --rm -v cyber-ghidra-webui-main_cyber_input:/data alpine ls -la /data`
+
+> **注意**: プロジェクトルートに残っている `./input/` フォルダは今後使用しません。既存ファイルがあれば削除して構いません。
+
 ## LLM アノテーション（`POST /api/annotate/{job_id}`）
 
 解析済みジョブに対して LLM による関数アノテーションを実行します。

@@ -17,7 +17,7 @@ services:
     tmpfs:
       - /tmp/extract:size=1G,noexec,nosuid,nodev
     volumes:
-      - ./input:/app/input
+      - cyber_input:/app/input
       - ./output:/app/output
       - ./queue:/app/queue
       - ./scripts/ghidra:/ghidra-scripts
@@ -46,7 +46,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./input:/app/input
+      - cyber_input:/app/input
       - ./output:/app/output
       - ./queue:/app/queue
       - ./scripts/ghidra:/ghidra-scripts:ro
@@ -70,3 +70,4 @@ services:
 
 volumes:
   ghidra_worker_projects:
+  cyber_input:
