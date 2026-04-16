@@ -386,44 +386,38 @@ async def upload_binary(
         extract_dir = Path(_tempfile.mkdtemp(dir=str(EXTRACT_TMPDIR)))
         try:
             files = _extract_archive(filepath, archive_password, extract_dir, archive_type)
+            if not files:
+                raise HTTPException(status_code=400, detail="No files found in archive")
+
+            jobs_out: list[dict[str, Any]] = []
+            for f in files:
+                jobs_out.append(_enqueue_binary_from_path(f))
+
+            return {
+                "archive": True,
+                "archive_type": archive_type,
+                "jobs": [
+                    {
+                        "job_id": j["job_id"],
+                        "filename": j["filename"],
+                        "sha256": j["sha256"],
+                    }
+                    for j in jobs_out
+                ],
+                "count": len(jobs_out),
+            }
+        except HTTPException:
+            raise
         except ValueError as exc:
-            shutil.rmtree(str(extract_dir), ignore_errors=True)
-            filepath.unlink(missing_ok=True)
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except Exception as exc:
-            shutil.rmtree(str(extract_dir), ignore_errors=True)
-            filepath.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=400,
                 detail="Archive extraction failed: %s" % str(exc),
             ) from exc
-
-        if not files:
-            shutil.rmtree(str(extract_dir), ignore_errors=True)
+        finally:
             filepath.unlink(missing_ok=True)
-            raise HTTPException(status_code=400, detail="No files found in archive")
-
-        filepath.unlink(missing_ok=True)
-
-        jobs_out: list[dict[str, Any]] = []
-        for f in files:
-            jobs_out.append(_enqueue_binary_from_path(f))
-
-        shutil.rmtree(str(extract_dir), ignore_errors=True)
-
-        return {
-            "archive": True,
-            "archive_type": archive_type,
-            "jobs": [
-                {
-                    "job_id": j["job_id"],
-                    "filename": j["filename"],
-                    "sha256": j["sha256"],
-                }
-                for j in jobs_out
-            ],
-            "count": len(jobs_out),
-        }
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
 
     hashes = compute_hashes(filepath)
     project_name = f"p_{hashes['sha256'][:16]}"

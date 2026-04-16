@@ -46,7 +46,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./input:/app/input:ro
+      - ./input:/app/input
       - ./output:/app/output
       - ./queue:/app/queue
       - ./scripts/ghidra:/ghidra-scripts:ro
