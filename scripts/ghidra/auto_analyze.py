@@ -8,7 +8,7 @@
 from __future__ import print_function
 
 import json
-import codecs
+import io
 import os
 import re
 
@@ -751,8 +751,8 @@ def run():
     out_path = "/app/output/" + out_name
     try:
         _progress_emit(98)
-        with codecs.open(out_path, "w", "utf-8") as fh:
-            fh.write(json.dumps(result, indent=2, ensure_ascii=False))
+        with io.open(out_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(result, indent=2, ensure_ascii=False))
         _progress_emit(100)
         println("[CyberGhidra] Analysis complete: " + out_path)
     except Exception as ex:

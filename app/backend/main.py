@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -294,9 +295,9 @@ async def list_results():
 
 @app.get("/api/results/{filename}")
 async def get_result(filename: str):
+    if not filename or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
     safe = Path(filename).name
-    if safe != filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
     if safe.endswith(".status.json"):
         raise HTTPException(
             status_code=404,
@@ -321,9 +322,9 @@ async def get_result(filename: str):
 @app.get("/api/results/{filename}/decompiled")
 async def download_decompiled(filename: str):
     """全デコンパイル済み関数を結合した .c テキストを返す"""
+    if not filename or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
     safe = Path(filename).name
-    if safe != filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
 
     filepath = (OUTPUT_DIR / safe).resolve()
     try:
@@ -386,9 +387,15 @@ async def download_decompiled(filename: str):
 def _write_annotate_status(annotate_id: str, data: dict[str, Any]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / ("%s.annotate_status.json" % annotate_id)
-    tmp = OUTPUT_DIR / ("%s.annotate_status.json.tmp" % annotate_id)
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(OUTPUT_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 def _read_annotate_status(annotate_id: str) -> dict[str, Any] | None:
@@ -440,70 +447,73 @@ async def start_annotation(job_id: str, body: AnnotateBody = AnnotateBody()):
     _write_annotate_status(annotate_id, status_data)
 
     async def _run_annotation() -> None:
-        annotations: list[dict[str, Any]] = []
         try:
-            async with httpx.AsyncClient() as client:
-                for i, func in enumerate(targets):
-                    try:
-                        ann = await annotate_function(client, func, model)
-                        annotations.append(ann)
-                    except Exception as exc:
-                        annotations.append(
-                            {
-                                "function_name": func.get("name", ""),
-                                "address": func.get("address", ""),
-                                "summary": "LLM error: %s" % exc,
-                                "risk_level": "unknown",
-                                "risk_reasons": [],
-                                "ioc_candidates": [],
-                                "decompiled_c_hash": "",
-                            }
-                        )
-                    # 進捗更新（5関数ごと、または最後）
-                    if (i + 1) % 5 == 0 or i + 1 == len(targets):
-                        status_data["completed_functions"] = i + 1
-                        status_data["updated"] = datetime.now().isoformat()
-                        _write_annotate_status(annotate_id, status_data)
-        except Exception as exc:
-            status_data["status"] = "failed"
-            status_data["error"] = str(exc)
+            annotations: list[dict[str, Any]] = []
+            try:
+                async with httpx.AsyncClient() as client:
+                    for i, func in enumerate(targets):
+                        try:
+                            ann = await annotate_function(client, func, model)
+                            annotations.append(ann)
+                        except Exception as exc:
+                            annotations.append(
+                                {
+                                    "function_name": func.get("name", ""),
+                                    "address": func.get("address", ""),
+                                    "summary": "LLM error: %s" % exc,
+                                    "risk_level": "unknown",
+                                    "risk_reasons": [],
+                                    "ioc_candidates": [],
+                                    "decompiled_c_hash": "",
+                                }
+                            )
+                        # 進捗更新（5関数ごと、または最後）
+                        if (i + 1) % 5 == 0 or i + 1 == len(targets):
+                            status_data["completed_functions"] = i + 1
+                            status_data["updated"] = datetime.now().isoformat()
+                            _write_annotate_status(annotate_id, status_data)
+            except Exception as exc:
+                status_data["status"] = "failed"
+                status_data["error"] = str(exc)
+                status_data["updated"] = datetime.now().isoformat()
+                _write_annotate_status(annotate_id, status_data)
+                return
+
+            high = sum(1 for a in annotations if a.get("risk_level") == "high")
+            med = sum(1 for a in annotations if a.get("risk_level") == "medium")
+            low = sum(1 for a in annotations if a.get("risk_level") == "low")
+            ioc_count = sum(len(a.get("ioc_candidates") or []) for a in annotations)
+
+            result: dict[str, Any] = {
+                "source_job_id": job_id,
+                "annotate_id": annotate_id,
+                "model": model,
+                "strategy": body.strategy,
+                "created": status_data["created"],
+                "annotations": annotations,
+                "summary": {
+                    "total_annotated": len(annotations),
+                    "high_risk": high,
+                    "medium_risk": med,
+                    "low_risk": low,
+                    "ioc_count": ioc_count,
+                },
+            }
+
+            out_name = "%s%s" % (annotate_id, ANNOTATED_SUFFIX)
+            out_path = OUTPUT_DIR / out_name
+            out_path.write_text(
+                json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
+            status_data["status"] = "completed"
+            status_data["completed_functions"] = len(targets)
+            status_data["output_file"] = out_name
+            status_data["summary"] = result["summary"]
             status_data["updated"] = datetime.now().isoformat()
             _write_annotate_status(annotate_id, status_data)
-            return
-
-        high = sum(1 for a in annotations if a.get("risk_level") == "high")
-        med = sum(1 for a in annotations if a.get("risk_level") == "medium")
-        low = sum(1 for a in annotations if a.get("risk_level") == "low")
-        ioc_count = sum(len(a.get("ioc_candidates") or []) for a in annotations)
-
-        result: dict[str, Any] = {
-            "source_job_id": job_id,
-            "annotate_id": annotate_id,
-            "model": model,
-            "strategy": body.strategy,
-            "created": status_data["created"],
-            "annotations": annotations,
-            "summary": {
-                "total_annotated": len(annotations),
-                "high_risk": high,
-                "medium_risk": med,
-                "low_risk": low,
-                "ioc_count": ioc_count,
-            },
-        }
-
-        out_name = "%s%s" % (annotate_id, ANNOTATED_SUFFIX)
-        out_path = OUTPUT_DIR / out_name
-        out_path.write_text(
-            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-
-        status_data["status"] = "completed"
-        status_data["completed_functions"] = len(targets)
-        status_data["output_file"] = out_name
-        status_data["summary"] = result["summary"]
-        status_data["updated"] = datetime.now().isoformat()
-        _write_annotate_status(annotate_id, status_data)
+        finally:
+            _annotate_tasks.pop(annotate_id, None)
 
     task = asyncio.create_task(_run_annotation())
     _annotate_tasks[annotate_id] = task

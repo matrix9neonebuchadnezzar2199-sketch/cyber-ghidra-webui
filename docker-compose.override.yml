@@ -16,5 +16,9 @@ services:
     depends_on:
       - backend
 
+  backend:
+    volumes:
+      - ./app/backend:/app
+
 volumes:
   frontend_dev_node_modules:

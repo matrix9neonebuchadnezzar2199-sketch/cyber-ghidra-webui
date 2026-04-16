@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Download } from 'lucide-react';
 import type { AnalysisJson, CfgData } from '../../types/analysis';
@@ -150,22 +150,42 @@ export function AnalysisDetail({
     }
   };
 
+  const handleDownloadDecompiled = useCallback(async () => {
+    if (!loadedFilename) return;
+    const url = `${apiBase}/api/results/${encodeURIComponent(loadedFilename)}/decompiled`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const errText = await res.text();
+        alert(`ダウンロード失敗 (${res.status}): ${errText}`);
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition');
+      let downloadName = loadedFilename.replace(/\.json$/, '') + '_decompiled.c';
+      if (disposition) {
+        const match = disposition.match(/filename="?(.+?)"?$/);
+        if (match) downloadName = match[1];
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch {
+      alert('ダウンロードに失敗しました。サーバーとの接続を確認してください。');
+    }
+  }, [apiBase, loadedFilename]);
+
   return (
     <div className="apple-adetail">
       <div className="apple-adetail-toolbar">
         <button
           type="button"
           className="apple-btn apple-btn-outline"
-          onClick={() => {
-            if (!loadedFilename) return;
-            const url = `${apiBase}/api/results/${encodeURIComponent(loadedFilename)}/decompiled`;
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = '';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-          }}
+          onClick={() => void handleDownloadDecompiled()}
           disabled={!loadedFilename}
           title="デコンパイル済みの全関数を .c ファイルとしてダウンロード（AI 分析用）"
         >

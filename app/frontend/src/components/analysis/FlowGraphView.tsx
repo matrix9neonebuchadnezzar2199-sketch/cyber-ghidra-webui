@@ -155,6 +155,7 @@ function FlowGraphInner({ cfg, onBlockSelect, highlightBlockId }: Props) {
       nodesConnectable={false}
       elevateNodesOnSelect={false}
     >
+      <CyberFlowDefs />
       {!cfgHeavy && <Background color="#1a1528" gap={28} size={1.2} />}
       <Controls className="cyber-controls" />
       {!cfgHeavy && (
@@ -211,7 +212,6 @@ export function FlowGraphView({ cfg, onBlockSelect, highlightBlockId }: Props) {
 
   return (
     <div className="cyber-flow-wrap">
-      <CyberFlowDefs />
       <ReactFlowProvider>
         <FlowGraphInner
           cfg={cfg}

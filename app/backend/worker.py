@@ -28,6 +28,13 @@ POLL_SEC = float(os.environ.get("WORKER_POLL_SEC", "2"))
 PROGRESS_RE = re.compile(r"\[CyberGhidra\]\s*PROGRESS\s+(\d+)", re.IGNORECASE)
 
 
+def _extract_analysis_json(tail: str) -> str | None:
+    m = re.search(r"Analysis complete:\s+(\S+\.json)", tail)
+    if not m:
+        return None
+    return Path(m.group(1)).name
+
+
 def write_status(job_id: str, data: dict) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"{job_id}.status.json"
@@ -117,6 +124,7 @@ def process_job(job_path: Path) -> None:
         full_lines: list[str] = []
         last_line: list[str] = [""]
         last_progress = [None]
+        analysis_json_from_line: list[str | None] = [None]
 
         def drain_stdout() -> None:
             if proc.stdout is None:
@@ -134,6 +142,13 @@ def process_job(job_path: Path) -> None:
                             last_progress[0] = max(0, min(100, v))
                         except ValueError:
                             pass
+                    m_ac = re.search(
+                        r"\[CyberGhidra\]\s*Analysis complete:\s+(\S+\.json)",
+                        line,
+                        re.IGNORECASE,
+                    )
+                    if m_ac:
+                        analysis_json_from_line[0] = Path(m_ac.group(1)).name
             except Exception:
                 pass
 
@@ -186,9 +201,9 @@ def process_job(job_path: Path) -> None:
             out["error"] = "analyzeHeadless exited with a non-zero status"
             out["progress_message"] = last_line[0] or ""
         else:
-            m = re.search(r"Analysis complete:\s+(\S+\.json)", combined)
-            if m:
-                old_name = Path(m.group(1)).name
+            picked = analysis_json_from_line[0] or _extract_analysis_json(combined)
+            if picked:
+                old_name = picked
                 if job_id and job_id not in old_name:
                     old_path = OUTPUT_DIR / old_name
                     dest_name = "%s_%s" % (job_id, old_name)

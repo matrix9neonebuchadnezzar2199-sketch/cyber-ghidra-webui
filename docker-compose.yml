@@ -15,7 +15,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./app/backend:/app
       - ./input:/app/input
       - ./output:/app/output
       - ./queue:/app/queue
