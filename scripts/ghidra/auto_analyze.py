@@ -232,35 +232,53 @@ def _disasm_lines(program, block, monitor):
     listing = program.getListing()
     out = []
     try:
-        from ghidra.program.model.address import AddressRangeImpl
-        rng = AddressRangeImpl(block.getMinAddress(), block.getMaxAddress())
-        it = listing.getInstructions(rng, True)
+        # 方法1: getInstructions(Address, boolean) でブロック先頭から順に取得
+        addr = block.getMinAddress()
+        max_addr = block.getMaxAddress()
+        it = listing.getInstructions(addr, True)
         while it.hasNext() and len(out) < MAX_CFG_DISASM:
             ins = it.next()
+            ins_addr = ins.getAddress()
+            # ブロック範囲外に出たら終了
+            if ins_addr.compareTo(max_addr) > 0:
+                break
             try:
                 out.append(ins.toString())
             except Exception:
                 out.append(str(ins))
     except Exception:
-        pass
+        # 方法1が失敗した場合、方法2: AddressRangeImpl を使う（従来ロジック）
+        try:
+            from ghidra.program.model.address import AddressRangeImpl
+
+            rng = AddressRangeImpl(block.getMinAddress(), block.getMaxAddress())
+            it2 = listing.getInstructions(rng, True)
+            while it2.hasNext() and len(out) < MAX_CFG_DISASM:
+                ins = it2.next()
+                try:
+                    out.append(ins.toString())
+                except Exception:
+                    out.append(str(ins))
+        except Exception:
+            pass
     return out
 
 
 def _last_instruction_in_block(program, block, monitor):
     """Last disassembled instruction in a basic block (for branch labels)."""
     listing = program.getListing()
-    try:
-        from ghidra.program.model.address import AddressRangeImpl
-        rng = AddressRangeImpl(block.getMinAddress(), block.getMaxAddress())
-        it = listing.getInstructions(rng, True)
-    except Exception:
-        return None
     last = None
     try:
+        addr = block.getMinAddress()
+        max_addr = block.getMaxAddress()
+        it = listing.getInstructions(addr, True)
         while it.hasNext():
-            last = it.next()
+            ins = it.next()
+            if ins.getAddress().compareTo(max_addr) > 0:
+                break
+            last = ins
     except Exception:
-        return last
+        pass
     return last
 
 
