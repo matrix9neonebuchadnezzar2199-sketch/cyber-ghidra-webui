@@ -25,10 +25,12 @@ docker compose up -d --scale ghidra-worker=2
 
 ### `requirements.txt` を変えたあと（`ModuleNotFoundError` 対策）
 
-バックエンドの依存は **イメージビルド時** に `/opt/venv` へ入ります。`docker-compose.yml` で `./app/backend:/app` とマウントしていても、venv はマウントで上書きされないため、**`app/backend/requirements.txt` を更新したらイメージを再ビルド**してください。
+バックエンドの依存は **イメージビルド時** に `/opt/venv` へ入ります。現行の `docker-compose.yml` では **`backend` / `ghidra-worker` に `./app/backend` のホストマウントはありません**（アプリコードはイメージに焼き込み）。そのため **`app/backend/requirements.txt` を変えたら必ずイメージを再ビルド**してください。
+
+一方、`./scripts/ghidra` はコンテナ内 `/ghidra-scripts` に **バインドマウント**されるため、`auto_analyze.py` 等の変更は **再ビルドなしで** `ghidra-worker` 再起動後に反映されます（Python 依存の追加は上記とおり再ビルドが必要）。
 
 ```bash
-docker compose build backend
+docker compose build backend ghidra-worker
 docker compose up -d
 ```
 
