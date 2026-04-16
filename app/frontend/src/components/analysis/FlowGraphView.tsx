@@ -13,115 +13,40 @@ import {
   type Node,
   type NodeTypes,
   type EdgeTypes,
-  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import type { CfgData, CfgNode } from '../../types/analysis';
+import type { CfgData } from '../../types/analysis';
 import { CfgBlockNode } from './CfgBlockNode';
-import { CyberFlowEdge } from './CyberFlowEdge';
+import { CYBER_BLUR_ID, CYBER_GRAD_ID, CyberFlowEdge } from './CyberFlowEdge';
+import { layoutCfgElk } from './elkLayout';
 
-const NODE_W = 220;
-const NODE_H = 88;
-const H_GAP = 44;
-const V_GAP = 72;
+/** 全 CyberFlowEdge が参照する SVG defs を 1 回だけ描画する */
+function CyberFlowDefs() {
+  return (
+    <svg style={{ position: 'absolute', width: 0, height: 0 }}>
+      <defs>
+        <linearGradient id={CYBER_GRAD_ID} x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#00f3ff" />
+          <stop offset="45%" stopColor="#c56bff" />
+          <stop offset="100%" stopColor="#ff2a6d" />
+        </linearGradient>
+        <filter id={CYBER_BLUR_ID} x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="3.5" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+    </svg>
+  );
+}
 
-/** これ以上は Cyber エッジをやめ、ビューポート最適化・ミニマップ省略 */
 const CFG_HEAVY_NODES = 55;
 const CFG_HEAVY_EDGES = 90;
 
 const nodeTypes = { cfgBlock: CfgBlockNode } satisfies NodeTypes;
 const edgeTypes = { cyber: CyberFlowEdge } satisfies EdgeTypes;
-
-/** Topological-style ranks without dagre (no extra npm deps — works in stale Docker node_modules). */
-function layoutCfg(cfg: CfgData): { nodes: Node[]; edges: Edge[] } {
-  if (!cfg.nodes.length) {
-    return { nodes: [], edges: [] };
-  }
-
-  const nodeIds = new Set(cfg.nodes.map((n) => n.id));
-  const rank = new Map<string, number>();
-  cfg.nodes.forEach((n) => rank.set(n.id, 0));
-
-  const entryId = pickEntryNode(cfg.nodes);
-  rank.set(entryId, 0);
-
-  const maxIter = nodeIds.size + 24;
-  for (let iter = 0; iter < maxIter; iter++) {
-    let changed = false;
-    for (const e of cfg.edges) {
-      if (!nodeIds.has(e.from) || !nodeIds.has(e.to)) continue;
-      const next = (rank.get(e.from) ?? 0) + 1;
-      if (next > (rank.get(e.to) ?? 0)) {
-        rank.set(e.to, next);
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-
-  const layers = new Map<number, string[]>();
-  rank.forEach((r, id) => {
-    if (!layers.has(r)) layers.set(r, []);
-    layers.get(r)!.push(id);
-  });
-  layers.forEach((ids) => ids.sort());
-
-  const maxRank = Math.max(0, ...rank.values());
-  const positions = new Map<string, { x: number; y: number }>();
-
-  for (let r = 0; r <= maxRank; r++) {
-    const ids = layers.get(r);
-    if (!ids?.length) continue;
-    const step = NODE_W + H_GAP;
-    const layerW = ids.length * step - H_GAP;
-    let x0 = -layerW / 2;
-    ids.forEach((id, i) => {
-      positions.set(id, { x: x0 + i * step, y: r * (NODE_H + V_GAP) });
-    });
-  }
-
-  const rfNodes: Node[] = cfg.nodes.map((n) => ({
-    id: n.id,
-    type: 'cfgBlock',
-    data: {
-      address: n.start,
-      preview: n.preview,
-      disasm: n.disasm,
-      isEntry: n.is_entry,
-      isExit: n.is_exit,
-    },
-    position: positions.get(n.id) ?? { x: 0, y: 0 },
-  }));
-
-  const heavy = cfg.nodes.length >= CFG_HEAVY_NODES || cfg.edges.length >= CFG_HEAVY_EDGES;
-  const rfEdges: Edge[] = cfg.edges.map((e, i) =>
-    heavy
-      ? {
-          id: `${e.from}->${e.to}-${i}`,
-          source: e.from,
-          target: e.to,
-          type: 'smoothstep',
-          style: { stroke: 'rgba(0, 200, 255, 0.42)', strokeWidth: 1.25 },
-        }
-      : {
-          id: `${e.from}->${e.to}-${i}`,
-          source: e.from,
-          target: e.to,
-          type: 'cyber',
-          label: e.label,
-          data: { kind: e.kind },
-        },
-  );
-
-  return { nodes: rfNodes, edges: rfEdges };
-}
-
-function pickEntryNode(nodes: CfgNode[]): string {
-  const marked = nodes.find((n) => n.is_entry);
-  if (marked) return marked.id;
-  if (nodes.length === 1) return nodes[0].id;
-  return nodes.reduce((a, b) => (a.start <= b.start ? a : b)).id;
-}
 
 function FitViewButton() {
   const { fitView } = useReactFlow();
@@ -138,49 +63,78 @@ function FitViewButton() {
 
 type Props = {
   cfg: CfgData;
+  onBlockSelect?: (address: string) => void;
+  highlightBlockId?: string | null;
 };
 
-function FlowGraphInner({ cfg }: Props) {
-  const initial = useMemo(() => layoutCfg(cfg), [cfg]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+function FlowGraphInner({ cfg, onBlockSelect, highlightBlockId }: Props) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [layoutReady, setLayoutReady] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const { fitView, setCenter } = useReactFlow();
 
   const cfgHeavy =
     cfg.nodes.length >= CFG_HEAVY_NODES || cfg.edges.length >= CFG_HEAVY_EDGES;
 
   useEffect(() => {
-    const next = layoutCfg(cfg);
-    setNodes(next.nodes);
-    setEdges(next.edges);
-    setDetailId(null);
-  }, [cfg, setNodes, setEdges]);
+    let cancelled = false;
+    setLayoutReady(false);
 
-  const onInit = useCallback(
-    (instance: ReactFlowInstance) => {
-      window.requestAnimationFrame(() => {
-        instance.fitView({ padding: 0.15, duration: cfgHeavy ? 0 : 200 });
-      });
+    layoutCfgElk(cfg, cfgHeavy).then((result) => {
+      if (cancelled) return;
+      setNodes(result.nodes);
+      setEdges(result.edges);
+      setDetailId(null);
+      setLayoutReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cfg, cfgHeavy, setNodes, setEdges]);
+
+  useEffect(() => {
+    if (!layoutReady) return;
+    const timer = requestAnimationFrame(() => {
+      fitView({ padding: 0.15, duration: cfgHeavy ? 0 : 200 });
+    });
+    return () => cancelAnimationFrame(timer);
+  }, [layoutReady, fitView, cfgHeavy]);
+
+  useEffect(() => {
+    if (!highlightBlockId || !layoutReady) return;
+    const target = nodes.find((n) => n.id === highlightBlockId);
+    if (target) {
+      setCenter(target.position.x + 115, target.position.y + 46, { zoom: 1.2, duration: 300 });
+      setDetailId(highlightBlockId);
+    }
+  }, [highlightBlockId, layoutReady, nodes, setCenter]);
+
+  const onNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setDetailId(node.id);
+      onBlockSelect?.(node.id);
     },
-    [cfgHeavy],
+    [onBlockSelect],
   );
 
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    setDetailId(node.id);
-  }, []);
-
-  const detailText = useMemo(() => {
-    if (!detailId) return '';
-    const n = cfg.nodes.find((x) => x.id === detailId);
-    if (!n) return '';
-    if (n.disasm?.length) return n.disasm.join('\n');
-    return n.preview ?? '';
+  const detailNode = useMemo(() => {
+    if (!detailId) return null;
+    return cfg.nodes.find((x) => x.id === detailId) ?? null;
   }, [detailId, cfg.nodes]);
 
-  const detailAddr = useMemo(() => {
-    if (!detailId) return '';
-    return cfg.nodes.find((x) => x.id === detailId)?.start ?? '';
-  }, [detailId, cfg.nodes]);
+  const detailText = detailNode?.disasm?.length
+    ? detailNode.disasm.join('\n')
+    : detailNode?.preview ?? '';
+
+  if (!layoutReady) {
+    return (
+      <div className="cyber-flow-loading">
+        <p>レイアウトを計算しています…</p>
+      </div>
+    );
+  }
 
   return (
     <ReactFlow
@@ -190,55 +144,55 @@ function FlowGraphInner({ cfg }: Props) {
       onEdgesChange={onEdgesChange}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
-      onInit={onInit}
       onNodeClick={onNodeClick}
-      minZoom={0.15}
-      maxZoom={1.8}
+      minZoom={0.1}
+      maxZoom={2.0}
       fitView
       proOptions={{ hideAttribution: true }}
       className="cyber-flow"
       onlyRenderVisibleElements
-      nodesDraggable={false}
+      nodesDraggable
       nodesConnectable={false}
       elevateNodesOnSelect={false}
     >
-      {!cfgHeavy ? <Background color="#1a1528" gap={28} size={1.2} /> : null}
+      {!cfgHeavy && <Background color="#1a1528" gap={28} size={1.2} />}
       <Controls className="cyber-controls" />
-      {!cfgHeavy ? (
+      {!cfgHeavy && (
         <MiniMap
           className="cyber-minimap"
           maskColor="rgba(0,0,0,0.75)"
           nodeColor={() => '#00f3ff'}
         />
-      ) : null}
-      {cfgHeavy ? (
+      )}
+      {cfgHeavy && (
         <Panel position="top-left" className="cyber-flow-perf-panel">
-          基本ブロック数が多いため軽量表示です（画面内のみ描画・エッジ簡略・ミニマップ省略）。
+          基本ブロック数が多いため軽量表示です。ノードはドラッグ移動可能です。
         </Panel>
-      ) : null}
+      )}
       <Panel position="top-right">
         <FitViewButton />
       </Panel>
-      {detailId ? (
+      {detailNode && (
         <Panel position="bottom-center" className="cyber-flow-detail">
           <div className="cyber-flow-detail-inner">
             <div className="cyber-flow-detail-head">
-              <span className="cyber-flow-detail-addr">{detailAddr}</span>
+              <span className="cyber-flow-detail-addr">{detailNode.start}</span>
+              <span className="cyber-flow-detail-range">→ {detailNode.end}</span>
               <button type="button" className="cyber-flow-detail-close" onClick={() => setDetailId(null)}>
                 閉じる
               </button>
             </div>
             <pre className="cyber-flow-detail-pre">
-              {detailText || '（このブロックの命令行がありません。再解析で disasm が付与されます。）'}
+              {detailText || '（命令行がありません。再解析で disasm が付与されます。）'}
             </pre>
           </div>
         </Panel>
-      ) : null}
+      )}
     </ReactFlow>
   );
 }
 
-export function FlowGraphView({ cfg }: Props) {
+export function FlowGraphView({ cfg, onBlockSelect, highlightBlockId }: Props) {
   if (cfg.truncated && !cfg.nodes.length) {
     return (
       <div className="cyber-flow-empty">
@@ -257,8 +211,13 @@ export function FlowGraphView({ cfg }: Props) {
 
   return (
     <div className="cyber-flow-wrap">
+      <CyberFlowDefs />
       <ReactFlowProvider>
-        <FlowGraphInner cfg={cfg} />
+        <FlowGraphInner
+          cfg={cfg}
+          onBlockSelect={onBlockSelect}
+          highlightBlockId={highlightBlockId}
+        />
       </ReactFlowProvider>
     </div>
   );

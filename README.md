@@ -10,6 +10,19 @@
 2. AMD/NVIDIA環境を選択
 3. ブラウザで http://localhost:3001 を開く
 
+### ワーカーのスケールについて
+
+`ghidra-worker` はファイルシステムベースのキュー（`queue/pending/` → `queue/processing/` → `queue/done/`）を
+使用しており、**ワーカーは 1 インスタンスのみ**を前提としています。
+
+```bash
+# これは非対応（ジョブの競合が発生します）
+docker compose up -d --scale ghidra-worker=2
+```
+
+複数ワーカーでの並列解析が必要な場合は、Redis や PostgreSQL ベースのジョブキュー
+（arq, Celery 等）への移行を検討してください。
+
 ### `requirements.txt` を変えたあと（`ModuleNotFoundError` 対策）
 
 バックエンドの依存は **イメージビルド時** に `/opt/venv` へ入ります。`docker-compose.yml` で `./app/backend:/app` とマウントしていても、venv はマウントで上書きされないため、**`app/backend/requirements.txt` を更新したらイメージを再ビルド**してください。
@@ -23,8 +36,41 @@ docker compose up -d
 
 ## LLM アノテーション（`POST /api/annotate/{job_id}`）
 
-- 既定の `strategy=suspicious_only` は対象関数が少なく、数分以内に完了しやすいです。
-- **`strategy=all` はデコンパイル済み関数が多いと LLM 呼び出しが連続し、数十分以上かかったり、ブラウザや curl のタイムアウトに当たることがあります。** 同期処理の安全策として、関数数が **`ANNOTATE_ALL_MAX_FUNCTIONS`（既定 100）** を超える `all` は 400 で拒否します。緩和する場合は環境変数で上限を上げるか、`top_n` を利用してください（非同期キューは Phase 2c 予定）。
+解析済みジョブに対して LLM による関数アノテーションを実行します。
+リクエストは **202 Accepted** を即座に返し、バックグラウンドで処理します。
+
+### 基本フロー
+
+```bash
+# 1. アノテーション開始（202 が返る）
+curl -X POST http://localhost:8000/api/annotate/{job_id} \
+  -H "Content-Type: application/json" \
+  -d '{"strategy":"suspicious_only"}'
+# → { "status": "accepted", "annotate_id": "...", ... }
+
+# 2. 進捗ポーリング
+curl http://localhost:8000/api/annotate/status/{annotate_id}
+# → { "status": "running", "completed_functions": 12, "total_functions": 30, ... }
+
+# 3. 完了後に結果取得
+curl http://localhost:8000/api/annotate/result/{annotate_id}
+```
+
+### strategy
+
+- `suspicious_only`（既定）: 疑わしい API を呼んでいる関数のみ。対象が少なく数分以内に完了しやすい
+- `top_n`: デコンパイル済み関数をサイズ降順で上位 N 件（`top_n` パラメータで指定）
+- `all`: デコンパイル済み全関数。関数数が **`ANNOTATE_ALL_MAX_FUNCTIONS`（既定 100）** を超える場合は 400 で拒否
+
+### 環境変数
+
+| 変数 | 既定値 | 説明 |
+|---|---|---|
+| `LLM_API_URL` | `http://host.docker.internal:11434/v1` | OpenAI 互換 API（Ollama 等） |
+| `LLM_MODEL` | `llama3` | 使用モデル |
+| `LLM_TIMEOUT_SEC` | `120` | 1 関数あたりの LLM タイムアウト |
+| `LLM_USE_JSON_MODE` | `1` | JSON モードを要求するか |
+| `ANNOTATE_ALL_MAX_FUNCTIONS` | `100` | `strategy=all` の上限 |
 
 ## スモークテスト
 

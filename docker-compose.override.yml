@@ -1,0 +1,20 @@
+# 開発用オーバーライド: Vite dev server + ホットリロード
+# 本番では docker compose -f docker-compose.yml up -d で override を無視する
+services:
+  frontend:
+    build:
+      context: ./app/frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3000"
+    environment:
+      - WATCHPACK_POLLING=true
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./app/frontend:/app
+      - frontend_dev_node_modules:/app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  frontend_dev_node_modules:

@@ -1,8 +1,13 @@
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
 
 /**
- * Cyber-style edge: neon gradient + animated “power” dashes + branch label.
+ * Cyber-style edge: shared gradient/filter defs + animated dashes + branch label.
+ * <defs> are defined once in FlowGraphView via <CyberFlowDefs />.
  */
+
+export const CYBER_GRAD_ID = 'cyber-edge-grad';
+export const CYBER_BLUR_ID = 'cyber-edge-blur';
+
 export function CyberFlowEdge({
   id,
   sourceX,
@@ -23,40 +28,22 @@ export function CyberFlowEdge({
     targetPosition,
   });
 
-  const safe = id.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const gid = `cg-${safe}-grad`;
-  const fid = `cg-${safe}-blur`;
-
   return (
     <>
-      <defs>
-        <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#00f3ff" />
-          <stop offset="45%" stopColor="#c56bff" />
-          <stop offset="100%" stopColor="#ff2a6d" />
-        </linearGradient>
-        <filter id={fid} x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="3.5" result="b" />
-          <feMerge>
-            <feMergeNode in="b" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
-        style={{ stroke: `url(#${gid})`, strokeWidth: 2.5 }}
+        style={{ stroke: `url(#${CYBER_GRAD_ID})`, strokeWidth: 2.5 }}
       />
       <path
         d={path}
         fill="none"
-        stroke={`url(#${gid})`}
+        stroke={`url(#${CYBER_GRAD_ID})`}
         strokeWidth={9}
         strokeLinecap="round"
         opacity={0.28}
-        filter={`url(#${fid})`}
+        filter={`url(#${CYBER_BLUR_ID})`}
         pointerEvents="none"
       />
       <path

@@ -9,6 +9,7 @@ from __future__ import print_function
 
 import json
 import codecs
+import os
 import re
 
 from ghidra.app.decompiler import DecompInterface
@@ -24,6 +25,7 @@ MAX_CFG_EDGES = 220
 MAX_CFG_DISASM = 14
 MAX_CALL_GRAPH_NODES = 450
 MAX_CALL_GRAPH_EDGES = 1400
+MAX_XREFS_PER_FUNC = 50
 
 SUSPICIOUS_NAMES = frozenset([
     "VirtualAlloc", "VirtualProtect", "CreateRemoteThread",
@@ -68,6 +70,30 @@ def _safe_filename(name):
     if name is None:
         return "unknown"
     return re.sub(r'[^A-Za-z0-9._-]+', "_", str(name))[:200]
+
+
+def _job_id_for_output():
+    """postScript CLI args, then CYBERGHIDRA_JOB_ID (Popen env / Java getenv)."""
+    try:
+        args = getScriptArgs()
+        if args is not None and len(args) > 0:
+            return str(args[0])
+    except NameError:
+        pass
+    except Exception:
+        pass
+    jid = os.environ.get("CYBERGHIDRA_JOB_ID", "")
+    if jid:
+        return jid
+    try:
+        from java.lang import System
+
+        j = System.getenv("CYBERGHIDRA_JOB_ID")
+        if j:
+            return str(j)
+    except Exception:
+        pass
+    return ""
 
 
 def _analyze_decompiled_c(text):
@@ -254,6 +280,83 @@ def _block_id_containing(blocks, addr):
     return str(addr)
 
 
+def _extract_line_address_map(dres):
+    """
+    ClangTokenGroup からデコンパイル行番号→最小アドレスのマッピングを取得。
+    戻り値: {"1": "00401000", "3": "00401008", ...}  (行番号は1始まり)
+    """
+    result = {}
+    try:
+        markup = dres.getCCodeMarkup()
+        if markup is None:
+            return result
+
+        def _walk(node):
+            try:
+                nc = node.numChildren()
+                for i in range(nc):
+                    _walk(node.Child(i))
+            except Exception:
+                try:
+                    line_num = None
+                    if hasattr(node, "getLineParent"):
+                        lp = node.getLineParent()
+                        if lp is not None:
+                            line_num = lp.getLineNumber()
+                    if line_num is None:
+                        return
+                    min_addr = node.getMinAddress()
+                    if min_addr is None:
+                        return
+                    addr_str = str(min_addr)
+                    key = str(line_num)
+                    if key not in result:
+                        result[key] = addr_str
+                    else:
+                        if addr_str < result[key]:
+                            result[key] = addr_str
+                except Exception:
+                    pass
+
+        _walk(markup)
+    except Exception:
+        pass
+    return result
+
+
+def _collect_xrefs(program, func, monitor):
+    """この関数への参照 (callers) と この関数からの参照 (callees) を収集。"""
+    result = {"callers": [], "callees": []}
+
+    try:
+        calling_funcs = func.getCallingFunctions(monitor)
+        count = 0
+        while calling_funcs.hasNext() and count < MAX_XREFS_PER_FUNC:
+            cf = calling_funcs.next()
+            result["callers"].append({
+                "name": cf.getName(),
+                "address": str(cf.getEntryPoint()),
+            })
+            count += 1
+    except Exception:
+        pass
+
+    try:
+        called_funcs = func.getCalledFunctions(monitor)
+        count = 0
+        while called_funcs.hasNext() and count < MAX_XREFS_PER_FUNC:
+            cf = called_funcs.next()
+            result["callees"].append({
+                "name": cf.getName(),
+                "address": str(cf.getEntryPoint()),
+            })
+            count += 1
+    except Exception:
+        pass
+
+    return result
+
+
 def _edge_label(program, src_block, ref, monitor):
     """Human-oriented label: conditional uses last insn; fall-through explicit."""
     try:
@@ -384,13 +487,36 @@ def _build_cfg(program, func, monitor):
                 ft = ref.getFlowType()
                 kind = ft.getName() if ft is not None else "unknown"
             except Exception:
+                ft = None
                 kind = "unknown"
+
+            branch_dir = "none"
+            try:
+                if ft is not None and ft.isConditional():
+                    fall_addr = cb.getFallThrough()
+                    if fall_addr is not None and dest_addr is not None:
+                        if dest_addr.equals(fall_addr):
+                            branch_dir = "false"
+                        else:
+                            branch_dir = "true"
+                    else:
+                        branch_dir = "conditional"
+                elif ft is not None and ft.isFallthrough():
+                    branch_dir = "fallthrough"
+                elif ft is not None and ft.isCall():
+                    branch_dir = "call"
+                elif ft is not None and ft.isJump() and not ft.isConditional():
+                    branch_dir = "unconditional"
+            except Exception:
+                pass
+
             label = _edge_label(program, cb, ref, monitor)
             edges.append({
                 "from": src_id,
                 "to": tid,
                 "kind": kind,
                 "label": label,
+                "branch_dir": branch_dir,
             })
 
     has_out = set(e["from"] for e in edges)
@@ -541,6 +667,15 @@ def run():
                 df = dres.getDecompiledFunction()
                 if df is not None:
                     func_info["decompiled_c"] = df.getC()
+
+                try:
+                    hfunc = dres.getHighFunction()
+                    if hfunc is not None:
+                        line_map = _extract_line_address_map(dres)
+                        if line_map:
+                            func_info["line_address_map"] = line_map
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -554,6 +689,11 @@ def run():
             func_info["cfg"] = _build_cfg(program, func, monitor)
         except Exception as ex:
             func_info["cfg"] = {"truncated": True, "error": str(ex), "nodes": [], "edges": []}
+
+        try:
+            func_info["xrefs"] = _collect_xrefs(program, func, monitor)
+        except Exception:
+            func_info["xrefs"] = None
 
         result["functions"].append(func_info)
 
@@ -602,7 +742,12 @@ def run():
 
     _progress_emit(96)
 
-    out_name = _safe_filename(program.getName()) + "_analysis.json"
+    job_id = _job_id_for_output()
+    safe_name = _safe_filename(program.getName())
+    if job_id:
+        out_name = "%s_%s_analysis.json" % (job_id, safe_name)
+    else:
+        out_name = "%s_analysis.json" % safe_name
     out_path = "/app/output/" + out_name
     try:
         _progress_emit(98)

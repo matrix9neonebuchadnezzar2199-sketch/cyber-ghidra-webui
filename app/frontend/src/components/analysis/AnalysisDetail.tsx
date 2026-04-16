@@ -1,9 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import type { AnalysisJson } from '../../types/analysis';
+import { Download } from 'lucide-react';
+import type { AnalysisJson, CfgData } from '../../types/analysis';
+import { useApiBase } from '../../context/ApiContext';
 import { FlowGraphView } from './FlowGraphView';
 import { ProgramCallGraphView } from './ProgramCallGraphView';
 import { DecompileView } from './DecompileView';
+import { FlowLegend } from './FlowLegend';
+import { FlowExportMenu } from './FlowExportMenu';
+import { XrefPanel } from './XrefPanel';
+import { useFlowNavigation } from './useFlowNavigation';
+import { extractSubgraph, filterGraphByName, removeIsolatedNodes } from './graphUtils';
 
 type TabId = 'decompile' | 'flow' | 'strings' | 'imports' | 'entry' | 'suspicious' | 'metadata';
 
@@ -20,21 +27,85 @@ const TABS: { id: TabId; label: string }[] = [
 type Props = {
   data: AnalysisJson;
   selectedFnIndex: number | null;
-  /** コールグラフのノード選択時に左ツリーの関数を同期（エントリアドレスで一致） */
   onSelectFunctionByAddress?: (address: string) => void;
+  /** 読み込み済みの analysis JSON ファイル名（ダウンロード URL の構築に使用） */
+  loadedFilename?: string | null;
 };
 
-type FlowSubTab = 'cfg' | 'program';
+function findCfgBlockIdForAddress(cfg: CfgData, addr: string | null): string | null {
+  if (!addr) return null;
+  const direct = cfg.nodes.find((n) => n.id === addr || n.start === addr);
+  if (direct) return direct.id;
+  for (const n of cfg.nodes) {
+    if (n.start <= addr && addr <= n.end) return n.id;
+  }
+  return null;
+}
 
-export function AnalysisDetail({ data, selectedFnIndex, onSelectFunctionByAddress }: Props) {
+function buildCallGraphRiskMap(data: AnalysisJson): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const s of data.suspicious_apis) {
+    const f = data.functions.find((fn) => fn.name === s.seen_from);
+    if (f) m.set(f.address, 'high');
+  }
+  for (const fn of data.functions) {
+    if (m.has(fn.address)) continue;
+    const highs = fn.decompile_insights?.signals.some((x) => x.severity === 'high');
+    if (highs) m.set(fn.address, 'medium');
+  }
+  return m;
+}
+
+export function AnalysisDetail({
+  data,
+  selectedFnIndex,
+  onSelectFunctionByAddress,
+  loadedFilename,
+}: Props) {
+  const { apiBase } = useApiBase();
   const [tab, setTab] = useState<TabId>('decompile');
-  const [flowSub, setFlowSub] = useState<FlowSubTab>(() =>
-    data.call_graph?.nodes?.length ? 'program' : 'cfg',
-  );
   const [filterStrings, setFilterStrings] = useState('');
   const [filterImports, setFilterImports] = useState('');
 
+  const flowNav = useFlowNavigation();
+  const [cgDepth, setCgDepth] = useState<number>(-1);
+  const [cgFocusAddr, setCgFocusAddr] = useState<string | null>(null);
+  const [hideIsolated, setHideIsolated] = useState(false);
+  const [cgSearch, setCgSearch] = useState('');
+
+  const [cfgHighlightBlockId, setCfgHighlightBlockId] = useState<string | null>(null);
+  const [decompileHighlightLine, setDecompileHighlightLine] = useState<number | null>(null);
+
   const fn = selectedFnIndex !== null ? data.functions[selectedFnIndex] : null;
+
+  const callGraphRiskMap = useMemo(() => buildCallGraphRiskMap(data), [data]);
+
+  const filteredCallGraph = useMemo(() => {
+    if (!data.call_graph) return null;
+    let g = data.call_graph;
+
+    if (cgFocusAddr && cgDepth >= 0) {
+      g = extractSubgraph(g, cgFocusAddr, cgDepth);
+    }
+
+    if (hideIsolated) {
+      g = removeIsolatedNodes(g);
+    }
+
+    return g;
+  }, [data.call_graph, cgFocusAddr, cgDepth, hideIsolated]);
+
+  const cgSearchMatchIds = useMemo(() => {
+    if (!filteredCallGraph || !cgSearch.trim()) return undefined;
+    const ids = filterGraphByName(filteredCallGraph, cgSearch).matchIds;
+    if (ids.size === 0) return undefined;
+    return ids;
+  }, [filteredCallGraph, cgSearch]);
+
+  useEffect(() => {
+    setCfgHighlightBlockId(null);
+    setDecompileHighlightLine(null);
+  }, [fn?.address]);
 
   const filteredStrings = useMemo(() => {
     const q = filterStrings.trim().toLowerCase();
@@ -55,8 +126,53 @@ export function AnalysisDetail({ data, selectedFnIndex, onSelectFunctionByAddres
     );
   }, [data.imports, filterImports]);
 
+  const onDecompileLineClick = (lineNum: number, addr: string | null) => {
+    setDecompileHighlightLine(lineNum);
+    setTab('flow');
+    if (fn) {
+      flowNav.navigateTo({ type: 'cfg', functionAddress: fn.address, functionName: fn.name });
+      if (fn.cfg && addr) {
+        const bid = findCfgBlockIdForAddress(fn.cfg, addr);
+        setCfgHighlightBlockId(bid);
+      }
+    }
+  };
+
+  const onCfgBlockSelect = (blockId: string) => {
+    if (!fn?.cfg || !fn.line_address_map) return;
+    const lm = fn.line_address_map;
+    for (const [lineStr, addr] of Object.entries(lm)) {
+      const bid = findCfgBlockIdForAddress(fn.cfg!, addr);
+      if (bid === blockId) {
+        setDecompileHighlightLine(Number(lineStr));
+        return;
+      }
+    }
+  };
+
   return (
     <div className="apple-adetail">
+      <div className="apple-adetail-toolbar">
+        <button
+          type="button"
+          className="apple-btn apple-btn-outline"
+          onClick={() => {
+            if (!loadedFilename) return;
+            const url = `${apiBase}/api/results/${encodeURIComponent(loadedFilename)}/decompiled`;
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }}
+          disabled={!loadedFilename}
+          title="デコンパイル済みの全関数を .c ファイルとしてダウンロード（AI 分析用）"
+        >
+          <Download size={16} aria-hidden />
+          全デコンパイルコードをダウンロード
+        </button>
+      </div>
       <div className="apple-adetail-tabs" role="tablist">
         {TABS.map((t) => (
           <button
@@ -83,7 +199,19 @@ export function AnalysisDetail({ data, selectedFnIndex, onSelectFunctionByAddres
                     {fn.address} · {fn.size} bytes
                   </span>
                 </div>
-                <DecompileView fn={fn} />
+                <DecompileView
+                  fn={fn}
+                  highlightLine={decompileHighlightLine}
+                  onLineClick={onDecompileLineClick}
+                />
+                {fn.xrefs && (fn.xrefs.callers.length > 0 || fn.xrefs.callees.length > 0) && (
+                  <XrefPanel
+                    xrefs={fn.xrefs}
+                    onNavigate={(addr) => {
+                      onSelectFunctionByAddress?.(addr);
+                    }}
+                  />
+                )}
               </>
             ) : (
               <p className="apple-adetail-hint">左のツリーから関数を選択してください。</p>
@@ -94,77 +222,118 @@ export function AnalysisDetail({ data, selectedFnIndex, onSelectFunctionByAddres
         {tab === 'flow' && (
           <div className="apple-adetail-pane apple-adetail-pane--flow">
             <p className="apple-flow-ida-lead">
-              IDA に近い運用: まず<strong>コールグラフ（関数間）</strong>で全体を把握し、必要な関数だけ
-              <strong>関数内 CFG（基本ブロック）</strong>に入ります。
+              IDA に近い運用: <strong>コールグラフ</strong>で全体を把握し、必要なら
+              <strong>関数内 CFG</strong>へ。ブレッドクラムと「← 戻る」でビューを切り替えます。
             </p>
-            <div className="apple-flow-subtabs" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={flowSub === 'program'}
-                className={clsx('apple-flow-subtab', flowSub === 'program' && 'apple-flow-subtab--active')}
-                onClick={() => setFlowSub('program')}
-              >
-                コールグラフ（関数間）
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={flowSub === 'cfg'}
-                className={clsx('apple-flow-subtab', flowSub === 'cfg' && 'apple-flow-subtab--active')}
-                onClick={() => setFlowSub('cfg')}
-              >
-                関数内 CFG（基本ブロック）
-              </button>
+
+            <div className="cyber-flow-breadcrumb">
+              {flowNav.canGoBack && (
+                <button type="button" className="cyber-flow-breadcrumb-back" onClick={flowNav.goBack}>
+                  ← 戻る
+                </button>
+              )}
+              {flowNav.breadcrumbs.map((bc, i) => (
+                <span key={i} className="cyber-flow-breadcrumb-item">
+                  {i > 0 && <span className="cyber-flow-breadcrumb-sep"> › </span>}
+                  {bc.type === 'callgraph'
+                    ? 'コールグラフ'
+                    : bc.functionName ?? bc.functionAddress ?? 'CFG'}
+                </span>
+              ))}
             </div>
-            {flowSub === 'program' &&
-              (data.call_graph && data.call_graph.nodes.length > 0 ? (
-                <>
-                  <p className="apple-flow-ida-hint">
-                    ノードを<strong>クリック</strong>で左の関数ツリーに同期。<strong>ダブルクリック</strong>
-                    で「関数内 CFG」タブへ切り替え（IDA のコールグラフから関数グラフへ入る操作に近いです）。
-                  </p>
+
+            {flowNav.current.type === 'callgraph' && (
+              <>
+                <div className="cyber-flow-controls-bar">
+                  <input
+                    type="search"
+                    className="cyber-flow-search"
+                    placeholder="関数名・アドレスで検索…"
+                    value={cgSearch}
+                    onChange={(e) => setCgSearch(e.target.value)}
+                  />
+                  <FlowExportMenu callGraph={filteredCallGraph} />
+                  <label className="cyber-flow-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={hideIsolated}
+                      onChange={(e) => setHideIsolated(e.target.checked)}
+                    />
+                    孤立ノード非表示
+                  </label>
+                  <label className="cyber-flow-depth-label">
+                    深さ制限:
+                    <select
+                      className="cyber-flow-depth-select"
+                      value={cgDepth}
+                      onChange={(e) => setCgDepth(Number(e.target.value))}
+                    >
+                      <option value={-1}>制限なし</option>
+                      <option value={1}>1段</option>
+                      <option value={2}>2段</option>
+                      <option value={3}>3段</option>
+                      <option value={5}>5段</option>
+                    </select>
+                  </label>
+                  {cgFocusAddr && (
+                    <button
+                      type="button"
+                      className="cyber-flow-reset-focus"
+                      onClick={() => setCgFocusAddr(null)}
+                    >
+                      フォーカス解除
+                    </button>
+                  )}
+                </div>
+
+                {filteredCallGraph && filteredCallGraph.nodes.length > 0 ? (
                   <ProgramCallGraphView
-                    graph={data.call_graph}
+                    graph={filteredCallGraph}
                     entryPoints={data.entry_points}
-                    onSelectFunctionByAddress={onSelectFunctionByAddress}
+                    riskMap={callGraphRiskMap}
+                    searchMatchIds={cgSearchMatchIds}
+                    onSelectFunctionByAddress={(addr) => {
+                      onSelectFunctionByAddress?.(addr);
+                      if (cgDepth >= 0) setCgFocusAddr(addr);
+                    }}
                     onOpenFunctionCfg={(addr) => {
                       onSelectFunctionByAddress?.(addr);
-                      setFlowSub('cfg');
+                      const fnInfo = data.functions.find((f) => f.address === addr);
+                      flowNav.navigateTo({
+                        type: 'cfg',
+                        functionAddress: addr,
+                        functionName: fnInfo?.name ?? addr,
+                      });
                     }}
                   />
-                </>
-              ) : (
-                <p className="apple-adetail-hint">
-                  コールグラフがありません。{' '}
-                  <code className="apple-code">auto_analyze.py</code> 更新後に<strong>検体を再解析</strong>
-                  すると表示されます（古い JSON には含まれません）。上の「関数内 CFG」で基本ブロック図だけ参照できます。
-                </p>
-              ))}
-            {flowSub === 'cfg' && (
+                ) : (
+                  <p className="apple-adetail-hint">
+                    コールグラフがありません。バックエンド更新後に検体を再解析してください。
+                  </p>
+                )}
+              </>
+            )}
+
+            {flowNav.current.type === 'cfg' && (
               <>
-                {data.call_graph && data.call_graph.nodes.length > 0 ? (
-                  <button
-                    type="button"
-                    className="apple-flow-back"
-                    onClick={() => setFlowSub('program')}
-                  >
-                    ← コールグラフ（関数間）に戻る
-                  </button>
-                ) : null}
+                <div className="cyber-flow-controls-bar cyber-flow-controls-bar--cfg">
+                  <FlowLegend />
+                  <FlowExportMenu cfg={fn?.cfg} funcName={fn?.name} />
+                </div>
                 {fn ? (
                   fn.cfg ? (
-                    <FlowGraphView cfg={fn.cfg} />
+                    <FlowGraphView
+                      cfg={fn.cfg}
+                      onBlockSelect={onCfgBlockSelect}
+                      highlightBlockId={cfgHighlightBlockId}
+                    />
                   ) : (
                     <p className="apple-adetail-hint">
-                      CFG が含まれていません。バックエンドの <code className="apple-code">auto_analyze.py</code>{' '}
-                      更新後に<strong>検体を再解析</strong>すると、基本ブロックのフロー図と分岐ラベルが表示されます。
+                      CFG が含まれていません。バックエンド更新後に検体を再解析してください。
                     </p>
                   )
                 ) : (
-                  <p className="apple-adetail-hint">
-                    左のツリーから関数を選ぶか、コールグラフで関数をクリックしてください。
-                  </p>
+                  <p className="apple-adetail-hint">左のツリーから関数を選択してください。</p>
                 )}
               </>
             )}
@@ -282,7 +451,30 @@ export function AnalysisDetail({ data, selectedFnIndex, onSelectFunctionByAddres
 
         {tab === 'metadata' && (
           <div className="apple-adetail-pane">
-            <pre className="apple-pre apple-pre--metadata">{JSON.stringify(data, null, 2)}</pre>
+            <pre className="apple-pre apple-pre--metadata">
+              {JSON.stringify(
+                {
+                  file_name: data.file_name,
+                  architecture: data.architecture,
+                  compiler: data.compiler,
+                  entry_points: data.entry_points,
+                  function_count: data.functions.length,
+                  string_count: data.strings.length,
+                  import_count: data.imports.length,
+                  suspicious_apis: data.suspicious_apis,
+                  truncated: data.truncated,
+                  call_graph_nodes: data.call_graph?.nodes?.length ?? 0,
+                  call_graph_edges: data.call_graph?.edges?.length ?? 0,
+                },
+                null,
+                2,
+              )}
+            </pre>
+            <p className="apple-adetail-foot">
+              全JSONの表示はブラウザ負荷が大きいため、メタデータのみ表示しています。
+              完全なJSONは API (
+              <code className="apple-code">GET /api/results/{'{filename}'}</code>) から取得してください。
+            </p>
           </div>
         )}
       </div>

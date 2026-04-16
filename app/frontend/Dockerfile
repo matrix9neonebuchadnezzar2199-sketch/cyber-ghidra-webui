@@ -1,17 +1,16 @@
-FROM node:20-slim
+# --- Stage 1: Build ---
+FROM node:20-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 COPY . .
+RUN npm run build
 
-ENV NODE_ENV=development
-ENV WATCHPACK_POLLING=true
+# --- Stage 2: Serve ---
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 3000
-
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["npm", "run", "dev", "--", "--host"]
+CMD ["nginx", "-g", "daemon off;"]

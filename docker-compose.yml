@@ -5,13 +5,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3001:3000"
-    environment:
-      - WATCHPACK_POLLING=true
-      - VITE_API_URL=http://localhost:8000
-    volumes:
-      - ./app/frontend:/app
-      # Windows/mac で作った node_modules を載せない（esbuild 等は OS 別バイナリのため Linux 専用ボリューム）
-      - frontend_node_modules:/app/node_modules
     depends_on:
       - backend
 
@@ -66,15 +59,13 @@ services:
   ghidra-server:
     image: blacktop/ghidra:latest
     ports:
-      - "13100-13102:13100-13102"
+      - "127.0.0.1:13100-13102:13100-13102"
     volumes:
       - ./ghidra_data:/repos
     environment:
-      - GHIDRA_USERS=magi
-      # ヘッドレス環境で GUI 起動を試みるのを抑止（ログの ERROR 軽減）
+      - GHIDRA_USERS=${GHIDRA_SERVER_USER:-magi}
       - _JAVA_OPTIONS=-Djava.awt.headless=true
     restart: always
 
 volumes:
   ghidra_worker_projects:
-  frontend_node_modules:

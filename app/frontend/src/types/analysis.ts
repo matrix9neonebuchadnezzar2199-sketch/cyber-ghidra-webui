@@ -17,6 +17,8 @@ export type CfgEdge = {
   to: string;
   kind: string;
   label: string;
+  /** "true" | "false" | "fallthrough" | "unconditional" | "call" | "conditional" | "none" */
+  branch_dir?: string;
 };
 
 export type CfgData = {
@@ -69,6 +71,16 @@ export type DecompileInsights = {
   stats: DecompileStats;
 };
 
+export type XrefEntry = {
+  name: string;
+  address: string;
+};
+
+export type FunctionXrefs = {
+  callers: XrefEntry[];
+  callees: XrefEntry[];
+};
+
 export type AnalysisFunction = {
   name: string;
   address: string;
@@ -78,6 +90,10 @@ export type AnalysisFunction = {
   cfg?: CfgData | null;
   /** Present after re-analysis: pattern-based hints on decompiled C */
   decompile_insights?: DecompileInsights | null;
+  /** Line number (1-based) → address (from decompiler markup) */
+  line_address_map?: Record<string, string> | null;
+  /** Cross-references (callers / callees) */
+  xrefs?: FunctionXrefs | null;
 };
 
 export type AnalysisStringRow = {

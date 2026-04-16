@@ -366,6 +366,7 @@ export function AnalysisView() {
                 data={analysisData}
                 selectedFnIndex={selectedFnIndex}
                 onSelectFunctionByAddress={onSelectFunctionByAddress}
+                loadedFilename={loadedFilename}
               />
             </div>
           </div>

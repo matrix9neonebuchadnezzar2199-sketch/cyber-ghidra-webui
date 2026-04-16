@@ -93,21 +93,26 @@ def process_job(job_path: Path) -> None:
         project_name,
         "-import",
         str(filepath),
-        "-postScript",
-        "auto_analyze.py",
         "-scriptPath",
         str(SCRIPT_DIR),
+        "-postScript",
+        "auto_analyze.py",
+        job_id,
         "-deleteProject",
     ]
     PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
     try:
+        child_env = os.environ.copy()
+        child_env["CYBERGHIDRA_JOB_ID"] = job_id
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=child_env,
         )
         full_lines: list[str] = []
         last_line: list[str] = [""]
@@ -183,16 +188,35 @@ def process_job(job_path: Path) -> None:
         else:
             m = re.search(r"Analysis complete:\s+(\S+\.json)", combined)
             if m:
-                out["analysis_json"] = Path(m.group(1)).name
+                old_name = Path(m.group(1)).name
+                if job_id and job_id not in old_name:
+                    old_path = OUTPUT_DIR / old_name
+                    dest_name = "%s_%s" % (job_id, old_name)
+                    dest_path = OUTPUT_DIR / dest_name
+                    if old_path.is_file():
+                        try:
+                            dest_path.unlink(missing_ok=True)
+                            old_path.rename(dest_path)
+                            out["analysis_json"] = dest_name
+                        except OSError as exc:
+                            print(
+                                "[ghidra-worker] WARNING: failed to rename analysis JSON %s: %s"
+                                % (old_path, exc),
+                                flush=True,
+                            )
+                            out["analysis_json"] = old_name
+                    else:
+                        out["analysis_json"] = old_name
+                else:
+                    out["analysis_json"] = old_name
             else:
-                input_mtime = filepath.stat().st_mtime
                 candidates = sorted(
                     OUTPUT_DIR.glob("*_analysis.json"),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
                 for c in candidates:
-                    if c.stat().st_mtime >= input_mtime - 5.0:
+                    if job_id in c.name:
                         out["analysis_json"] = c.name
                         break
         write_status(job_id, out)
@@ -213,8 +237,11 @@ def process_job(job_path: Path) -> None:
 def _finish(proc_path: Path) -> None:
     QUEUE_DONE.mkdir(parents=True, exist_ok=True)
     dest = QUEUE_DONE / proc_path.name
-    if proc_path.exists():
-        proc_path.rename(dest)
+    try:
+        if proc_path.exists():
+            proc_path.rename(dest)
+    except OSError as exc:
+        print("[ghidra-worker] WARNING: failed to move %s to done: %s" % (proc_path, exc), flush=True)
 
 
 def main() -> None:

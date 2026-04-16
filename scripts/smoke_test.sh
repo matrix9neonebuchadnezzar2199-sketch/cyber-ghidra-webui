@@ -2,6 +2,9 @@
 # smoke_test.sh — cyber-ghidra-webui E2E smoke (WSL2 / Linux)
 # Usage: bash scripts/smoke_test.sh [path-to-binary]
 #   Default: copy /bin/ls to /tmp/ghidra_smoke_test_ls
+#
+# worker.py 変更後は ghidra-worker 用イメージも再ビルドすること（backend だけではワーカーが古いまま）:
+#   docker compose build backend ghidra-worker
 
 set -euo pipefail
 
@@ -59,16 +62,13 @@ done
 
 info "Fetch analysis JSON..."
 ANALYSIS_FILE=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('analysis_json') or '')")
-if [[ -n "$ANALYSIS_FILE" ]]; then
-    info "Using job.analysis_json=$ANALYSIS_FILE"
-    ANALYSIS=$(curl -sf "$API/api/results/$ANALYSIS_FILE") || fail "GET /api/results/$ANALYSIS_FILE failed"
-else
-    info "No analysis_json on job; using first entry from /api/results"
-    RESULTS=$(curl -sf "$API/api/results") || fail "GET /api/results failed"
-    FIRST=$(echo "$RESULTS" | python3 -c "import sys,json; r=json.load(sys.stdin).get('results',[]); print(r[0]['filename'] if r else '')")
-    [[ -n "$FIRST" ]] || fail "no *_analysis.json in output"
-    ANALYSIS=$(curl -sf "$API/api/results/$FIRST") || fail "GET /api/results/$FIRST failed"
-fi
+[[ -n "$ANALYSIS_FILE" ]] || fail "job completed but analysis_json missing (worker/status bug?)"
+case "$ANALYSIS_FILE" in
+    *"$JOB_ID"*) ;;
+    *) fail "analysis_json should include job_id ($JOB_ID), got: $ANALYSIS_FILE" ;;
+esac
+info "Using job.analysis_json=$ANALYSIS_FILE"
+ANALYSIS=$(curl -sf "$API/api/results/$ANALYSIS_FILE") || fail "GET /api/results/$ANALYSIS_FILE failed"
 
 echo "$ANALYSIS" | python3 -c "
 import sys, json
