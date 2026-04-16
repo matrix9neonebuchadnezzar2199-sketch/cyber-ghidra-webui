@@ -47,6 +47,7 @@ export function AnalysisView() {
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<{ id: string; filename: string; startedAt: number } | null>(
     null,
   );
@@ -129,6 +130,7 @@ export function AnalysisView() {
     if (!files?.length) return;
     setBusy(true);
     setMessage(null);
+    setStatusMessage(null);
     const fd = new FormData();
     fd.append('file', files[0]);
     fd.append('archive_password', archivePassword);
@@ -138,25 +140,40 @@ export function AnalysisView() {
       if (!r.ok) {
         setActiveJob(null);
         setMessage(typeof data.detail === 'string' ? data.detail : JSON.stringify(data));
-      } else if (data.archive === true) {
-        const count = typeof data.count === 'number' ? data.count : 0;
-        setMessage(`アーカイブから ${count} 件のバイナリを検出しました`);
-        const jobs = data.jobs as { job_id: string; filename: string }[] | undefined;
-        if (jobs && jobs.length > 0) {
-          setActiveJob({
-            id: jobs[0].job_id,
-            filename: jobs[0].filename,
-            startedAt: Date.now(),
-          });
-        } else {
-          setActiveJob(null);
-        }
       } else {
-        setActiveJob({
-          id: data.job_id as string,
-          filename: data.filename as string,
-          startedAt: Date.now(),
-        });
+        const isArchive =
+          data.archive === true ||
+          data.archive === 'true' ||
+          data.archive === 1;
+        if (isArchive) {
+          const count =
+            typeof data.count === 'number' ? data.count : Number(data.count) || 0;
+          const jobsList = Array.isArray(data.jobs) ? data.jobs : [];
+          setMessage(null);
+          setStatusMessage(`アーカイブから ${count} 件のバイナリを検出しました`);
+          if (jobsList.length > 0) {
+            const j0 = jobsList[0] as { job_id?: unknown; filename?: unknown };
+            const jid = typeof j0.job_id === 'string' ? j0.job_id : '';
+            const fn = typeof j0.filename === 'string' ? j0.filename : '';
+            if (jid) {
+              setActiveJob({ id: jid, filename: fn, startedAt: Date.now() });
+            } else {
+              setActiveJob(null);
+            }
+          } else {
+            setActiveJob(null);
+          }
+        } else {
+          setStatusMessage(null);
+          const jid = typeof data.job_id === 'string' ? data.job_id : '';
+          const fn = typeof data.filename === 'string' ? data.filename : '';
+          if (!jid) {
+            setActiveJob(null);
+            setMessage('アップロード応答が不正です（job_id がありません）');
+          } else {
+            setActiveJob({ id: jid, filename: fn, startedAt: Date.now() });
+          }
+        }
       }
     } catch (e) {
       setActiveJob(null);
@@ -233,9 +250,28 @@ export function AnalysisView() {
             aria-label="アーカイブパスワード"
           />
         </div>
+        {statusMessage && (
+          <div
+            className="apple-archive-status"
+            style={{
+              marginTop: 10,
+              padding: '8px 16px',
+              marginBottom: 4,
+              fontSize: 14,
+              lineHeight: 1.45,
+              borderRadius: 10,
+              color: '#6ee7b7',
+              background: 'rgba(6, 78, 59, 0.28)',
+              border: '1px solid rgba(52, 211, 153, 0.35)',
+            }}
+            role="status"
+          >
+            {statusMessage}
+          </div>
+        )}
         {message && <p className="apple-msg">{message}</p>}
 
-        {activeJob && (
+        {activeJob?.id && (
           <div className="apple-job-panel" role="status" aria-live="polite">
             <div className="apple-job-panel-header">
               <span className="apple-job-title">解析ジョブ</span>
@@ -339,6 +375,7 @@ export function AnalysisView() {
               onClick={() => {
                 setActiveJob(null);
                 setJobSnapshot(null);
+                setStatusMessage(null);
               }}
             >
               閉じる

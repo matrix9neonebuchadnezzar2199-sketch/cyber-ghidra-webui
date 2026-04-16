@@ -14,6 +14,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    tmpfs:
+      - /tmp/extract:size=1G,noexec,nosuid,nodev
     volumes:
       - ./input:/app/input
       - ./output:/app/output
@@ -57,13 +59,13 @@ services:
 
   ghidra-server:
     image: blacktop/ghidra:latest
+    command: server
     ports:
       - "127.0.0.1:13100-13102:13100-13102"
     volumes:
       - ./ghidra_data:/repos
     environment:
-      - GHIDRA_USERS=${GHIDRA_SERVER_USER:-magi}
-      - _JAVA_OPTIONS=-Djava.awt.headless=true
+      - GHIDRA_USERS=magi
     restart: always
 
 volumes:

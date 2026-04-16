@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
+import tempfile as _tempfile
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -33,6 +33,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200")) * 1024 * 102
 MAX_EXTRACT_SIZE_MB = int(os.environ.get("MAX_EXTRACT_SIZE_MB", "500"))
 MAX_EXTRACT_BYTES = MAX_EXTRACT_SIZE_MB * 1024 * 1024
 DEFAULT_ARCHIVE_PASSWORD = "infected"
+EXTRACT_TMPDIR = Path("/tmp/extract")
 
 
 class AnnotateBody(BaseModel):
@@ -151,27 +152,20 @@ def write_job_queue_atomic(job_id: str, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _is_archive(filepath: Path, password: str = "") -> str | None:
-    """アーカイブ種別を返す。非アーカイブなら None。"""
+def _is_archive(filepath: Path) -> str | None:
+    """アーカイブ種別を返す。非アーカイブなら None。7z はヘッダマジックで判定（パスワード不要）。"""
     try:
         if zipfile.is_zipfile(str(filepath)):
             return "zip"
     except Exception:
         pass
-    pwd_attempts: list[str | None] = []
-    if password:
-        pwd_attempts.append(password)
-    pwd_attempts.append(None)
-    tried: set[str | None] = set()
-    for pwd in pwd_attempts:
-        if pwd in tried:
-            continue
-        tried.add(pwd)
-        try:
-            with py7zr.SevenZipFile(str(filepath), mode="r", password=pwd) as _:
-                return "7z"
-        except Exception:
-            continue
+    try:
+        with open(str(filepath), "rb") as fh:
+            header = fh.read(6)
+        if header == b"7z\xbc\xaf\x27\x1c":
+            return "7z"
+    except Exception:
+        pass
     return None
 
 
@@ -272,6 +266,7 @@ def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
     while dest.exists():
         dest = INPUT_DIR / ("%s_%d%s" % (Path(safe_name).stem, counter, Path(safe_name).suffix))
         counter += 1
+    # tmpfs → input はクロスデバイスのため shutil.move（rename 不可の場合がある）
     shutil.move(str(src), str(dest))
 
     project_name = f"p_{hashes['sha256'][:16]}"
@@ -319,6 +314,7 @@ async def lifespan(app: FastAPI):
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     QUEUE_PENDING.mkdir(parents=True, exist_ok=True)
+    EXTRACT_TMPDIR.mkdir(parents=True, exist_ok=True)
     load_jobs_from_disk()
     yield
 
@@ -385,9 +381,9 @@ async def upload_binary(
         filepath.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Upload failed: %s" % exc) from exc
 
-    archive_type = _is_archive(filepath, archive_password)
+    archive_type = _is_archive(filepath)
     if archive_type is not None:
-        extract_dir = Path(tempfile.mkdtemp(dir=str(INPUT_DIR)))
+        extract_dir = Path(_tempfile.mkdtemp(dir=str(EXTRACT_TMPDIR)))
         try:
             files = _extract_archive(filepath, archive_password, extract_dir, archive_type)
         except ValueError as exc:
@@ -410,11 +406,10 @@ async def upload_binary(
         filepath.unlink(missing_ok=True)
 
         jobs_out: list[dict[str, Any]] = []
-        try:
-            for f in files:
-                jobs_out.append(_enqueue_binary_from_path(f))
-        finally:
-            shutil.rmtree(str(extract_dir), ignore_errors=True)
+        for f in files:
+            jobs_out.append(_enqueue_binary_from_path(f))
+
+        shutil.rmtree(str(extract_dir), ignore_errors=True)
 
         return {
             "archive": True,
@@ -604,7 +599,7 @@ async def download_decompiled(filename: str):
 def _write_annotate_status(annotate_id: str, data: dict[str, Any]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / ("%s.annotate_status.json" % annotate_id)
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(OUTPUT_DIR), suffix=".tmp")
+    tmp_fd, tmp_path = _tempfile.mkstemp(dir=str(OUTPUT_DIR), suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
