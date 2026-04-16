@@ -2113,3 +2113,30 @@ body {
 .cyber-export-dropdown button:hover {
   background: rgba(0, 243, 255, 0.1);
 }
+
+/* === Auto-unpack badge === */
+.apple-unpack-badge {
+  margin-top: 6px;
+  margin-bottom: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.apple-unpack-badge--success {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  font-weight: 500;
+}
+
+.apple-unpack-badge--skip {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 8px;
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}

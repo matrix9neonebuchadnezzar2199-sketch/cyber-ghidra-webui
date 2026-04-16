@@ -19,6 +19,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from annotator import annotate_function, select_target_functions
+from packer_detect import quick_packer_heuristic
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
@@ -34,6 +35,9 @@ MAX_EXTRACT_SIZE_MB = int(os.environ.get("MAX_EXTRACT_SIZE_MB", "500"))
 MAX_EXTRACT_BYTES = MAX_EXTRACT_SIZE_MB * 1024 * 1024
 DEFAULT_ARCHIVE_PASSWORD = "infected"
 EXTRACT_TMPDIR = Path("/tmp/extract")
+UNIPACKER_URL = os.environ.get("UNIPACKER_URL", "http://unipacker-worker:8001").rstrip("/")
+AUTO_UNPACK = os.environ.get("AUTO_UNPACK", "1").strip().lower() in ("1", "true", "yes")
+UNPACK_TIMEOUT_SEC = int(os.environ.get("UNPACK_TIMEOUT_SEC", "300"))
 
 
 class AnnotateBody(BaseModel):
@@ -253,12 +257,89 @@ def _extract_archive(
     return extracted
 
 
-def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
+async def _try_unpack(filepath: Path) -> dict[str, Any]:
+    """
+    Check if file is a packed PE and attempt unpacking via unipacker-worker.
+    Returns:
+      {"unpacked": True, "unpacked_path": Path, "packer_name": str, "original_sha256": str, ...}
+      or {"unpacked": False, "reason": str, "remote_attempted": bool}
+    """
+    result: dict[str, Any] = {
+        "unpacked": False,
+        "reason": "skipped",
+        "remote_attempted": False,
+    }
+    if not AUTO_UNPACK:
+        result["reason"] = "auto_unpack_disabled"
+        return result
+
+    hint = quick_packer_heuristic(filepath)
+    if not hint["is_pe"]:
+        result["reason"] = "not_pe"
+        return result
+    if not hint["likely_packed"]:
+        result["reason"] = "not_packed"
+        return result
+
+    result["remote_attempted"] = True
+    try:
+        timeout = httpx.Timeout(UNPACK_TIMEOUT_SEC, connect=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            with open(filepath, "rb") as fh:
+                resp = await client.post(
+                    "%s/unpack" % UNIPACKER_URL,
+                    files={"file": (filepath.name, fh, "application/octet-stream")},
+                )
+            if resp.status_code != 200:
+                result["reason"] = "unipacker returned %d" % resp.status_code
+                return result
+
+            content_type = resp.headers.get("content-type", "")
+            is_file_response = "application/octet-stream" in content_type
+
+            if not is_file_response:
+                body = resp.json()
+                result["reason"] = str(body.get("reason", "unknown"))
+                result["message"] = str(body.get("message", ""))
+                return result
+
+            unpacked_data = resp.content
+            packer_name = resp.headers.get("x-packer-name", "unknown")
+            unpacked_sha = resp.headers.get("x-unpacked-sha256", "")
+            original_sha = resp.headers.get("x-original-sha256", "")
+
+            unpacked_path = filepath.parent / ("unpacked_%s" % filepath.name)
+            unpacked_path.write_bytes(unpacked_data)
+            result["unpacked"] = True
+            result["unpacked_path"] = unpacked_path
+            result["packer_name"] = packer_name
+            result["original_sha256"] = original_sha
+            result["unpacked_sha256"] = unpacked_sha
+            return result
+    except Exception as exc:
+        result["reason"] = "unpack_error: %s" % exc
+        return result
+
+
+async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
     """
     単一バイナリからジョブを作成しキューに登録する。
     upload_binary の非アーカイブ経路と同一のペイロード・ステータス更新。
     """
-    hashes = compute_hashes(src)
+    unpack_info: dict[str, Any] = {
+        "unpacked": False,
+        "reason": "skipped",
+        "remote_attempted": False,
+    }
+    analysis_target = src
+    try:
+        unpack_info = await _try_unpack(src)
+        if unpack_info.get("unpacked") and unpack_info.get("unpacked_path"):
+            analysis_target = Path(str(unpack_info["unpacked_path"]))
+    except Exception:
+        pass
+
+    hashes = compute_hashes(analysis_target)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = f"{timestamp}_{src.name}"
     dest = INPUT_DIR / safe_name
@@ -267,7 +348,9 @@ def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         dest = INPUT_DIR / ("%s_%d%s" % (Path(safe_name).stem, counter, Path(safe_name).suffix))
         counter += 1
     # tmpfs → input はクロスデバイスのため shutil.move（rename 不可の場合がある）
-    shutil.move(str(src), str(dest))
+    shutil.move(str(analysis_target), str(dest))
+    if unpack_info.get("unpacked") and src != analysis_target and src.is_file():
+        src.unlink(missing_ok=True)
 
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
@@ -280,6 +363,12 @@ def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "sha256": hashes["sha256"],
         "created": created,
         "updated": created,
+        "unpack_info": {
+            "attempted": bool(unpack_info.get("remote_attempted")),
+            "unpacked": bool(unpack_info.get("unpacked")),
+            "packer_name": str(unpack_info.get("packer_name", "")),
+            "original_sha256": str(unpack_info.get("original_sha256", "")),
+        },
     }
     jobs[job_id] = record
     write_status_atomic(job_id, record)
@@ -291,6 +380,7 @@ def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "filename": dest.name,
         "sha256": hashes["sha256"],
         "created": created,
+        "unpack_info": record["unpack_info"],
     }
     try:
         write_job_queue_atomic(job_id, job_payload)
@@ -306,6 +396,7 @@ def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "job_id": job_id,
         "filename": dest.name,
         "sha256": hashes["sha256"],
+        "unpack_info": record["unpack_info"],
     }
 
 
@@ -343,7 +434,40 @@ async def health_check():
         "ghidra_cli": analyze_headless_exists(),
         "ghidra_home": str(GHIDRA_HOME),
         "queue_pending": QUEUE_PENDING.is_dir(),
+        "auto_unpack": AUTO_UNPACK,
     }
+
+
+@app.post("/api/detect-packer")
+async def detect_packer(file: UploadFile = File(...)):
+    """Standalone packer detection endpoint (does not trigger unpack)."""
+    if not file.filename:
+        raise HTTPException(400, detail="Missing filename")
+    tmp = INPUT_DIR / ("_detect_%s_%s" % (uuid.uuid4().hex[:8], Path(file.filename).name))
+    try:
+        data = await file.read()
+        tmp.write_bytes(data)
+        hint = quick_packer_heuristic(tmp)
+        return {
+            "filename": file.filename,
+            "is_pe": hint["is_pe"],
+            "likely_packed": hint["likely_packed"],
+            "hint": hint["hint"],
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@app.get("/api/unpack/health")
+async def unpack_health():
+    """Check if the unipacker-worker microservice is reachable."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("%s/health" % UNIPACKER_URL)
+            return r.json()
+    except Exception as exc:
+        return {"status": "unreachable", "error": str(exc)}
 
 
 @app.post("/api/upload")
@@ -391,7 +515,7 @@ async def upload_binary(
 
             jobs_out: list[dict[str, Any]] = []
             for f in files:
-                jobs_out.append(_enqueue_binary_from_path(f))
+                jobs_out.append(await _enqueue_binary_from_path(f))
 
             return {
                 "archive": True,
@@ -401,6 +525,7 @@ async def upload_binary(
                         "job_id": j["job_id"],
                         "filename": j["filename"],
                         "sha256": j["sha256"],
+                        "unpack_info": j.get("unpack_info"),
                     }
                     for j in jobs_out
                 ],
@@ -419,7 +544,21 @@ async def upload_binary(
             filepath.unlink(missing_ok=True)
             shutil.rmtree(str(extract_dir), ignore_errors=True)
 
-    hashes = compute_hashes(filepath)
+    unpack_info: dict[str, Any] = {
+        "unpacked": False,
+        "reason": "skipped",
+        "remote_attempted": False,
+    }
+    try:
+        unpack_info = await _try_unpack(filepath)
+    except Exception:
+        pass
+
+    analysis_target = filepath
+    if unpack_info.get("unpacked") and unpack_info.get("unpacked_path"):
+        analysis_target = Path(str(unpack_info["unpacked_path"]))
+
+    hashes = compute_hashes(analysis_target)
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
     created = datetime.now().isoformat()
@@ -431,17 +570,24 @@ async def upload_binary(
         "sha256": hashes["sha256"],
         "created": created,
         "updated": created,
+        "unpack_info": {
+            "attempted": bool(unpack_info.get("remote_attempted")),
+            "unpacked": bool(unpack_info.get("unpacked")),
+            "packer_name": str(unpack_info.get("packer_name", "")),
+            "original_sha256": str(unpack_info.get("original_sha256", "")),
+        },
     }
     jobs[job_id] = record
     write_status_atomic(job_id, record)
 
     job_payload = {
         "job_id": job_id,
-        "filepath": str(filepath),
+        "filepath": str(analysis_target),
         "project_name": project_name,
         "filename": safe_name,
         "sha256": hashes["sha256"],
         "created": created,
+        "unpack_info": record["unpack_info"],
     }
     try:
         write_job_queue_atomic(job_id, job_payload)
@@ -453,12 +599,20 @@ async def upload_binary(
         write_status_atomic(job_id, record)
         raise HTTPException(status_code=503, detail="Could not enqueue analysis job") from exc
 
+    if unpack_info.get("unpacked") and filepath.is_file() and analysis_target != filepath:
+        filepath.unlink(missing_ok=True)
+
     return {
         "status": "accepted",
         "job_id": job_id,
         "filename": safe_name,
         "hashes": hashes,
-        "message": "Job queued for ghidra-worker",
+        "unpack_info": record["unpack_info"],
+        "message": (
+            "Unpacked (%s) → Ghidra analysis queued" % unpack_info.get("packer_name", "?")
+            if unpack_info.get("unpacked")
+            else "Job queued for ghidra-worker"
+        ),
     }
 
 

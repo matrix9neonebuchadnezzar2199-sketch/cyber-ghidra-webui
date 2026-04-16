@@ -30,6 +30,38 @@ services:
       - LLM_MODEL=llama3
       - LLM_TIMEOUT_SEC=120
       - LLM_USE_JSON_MODE=1
+      - UNIPACKER_URL=http://unipacker-worker:8001
+    depends_on:
+      unipacker-worker:
+        condition: service_healthy
+
+  unipacker-worker:
+    build:
+      context: ./app/unipacker-worker
+      dockerfile: Dockerfile
+    tmpfs:
+      - /tmp:size=2G
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - UNPACK_TIMEOUT_SEC=300
+      - UNPACK_MAX_SIZE_MB=200
+    expose:
+      - "8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   ghidra-worker:
     build:

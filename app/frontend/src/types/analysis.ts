@@ -132,3 +132,11 @@ export type AnalysisJson = {
   /** After extended auto_analyze: inter-function calls */
   call_graph?: CallGraphData | null;
 };
+
+/** Unpack information attached to job status */
+export type UnpackInfo = {
+  attempted: boolean;
+  unpacked: boolean;
+  packer_name: string;
+  original_sha256: string;
+};

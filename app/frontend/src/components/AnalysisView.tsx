@@ -16,6 +16,12 @@ type JobStatus = {
   error?: string;
   analysis_json?: string;
   updated?: string;
+  unpack_info?: {
+    attempted?: boolean;
+    unpacked?: boolean;
+    packer_name?: string;
+    original_sha256?: string;
+  };
 };
 
 function statusLabelJa(status: string): string {
@@ -58,6 +64,7 @@ export function AnalysisView() {
     status?: string;
     ghidra_cli?: boolean;
     ghidra?: boolean;
+    auto_unpack?: boolean;
   } | null>(null);
 
   const [elapsedPulse, setElapsedPulse] = useState(0);
@@ -279,6 +286,20 @@ export function AnalysisView() {
             </div>
             <p className="apple-job-file">{activeJob.filename}</p>
 
+            {jobSnapshot?.unpack_info?.attempted && (
+              <div className="apple-unpack-badge" role="status">
+                {jobSnapshot.unpack_info.unpacked ? (
+                  <span className="apple-unpack-badge--success">
+                    ✓ アンパック済み（{jobSnapshot.unpack_info.packer_name || '?'}）
+                  </span>
+                ) : (
+                  <span className="apple-unpack-badge--skip">
+                    パック未検出 — 元のバイナリで解析
+                  </span>
+                )}
+              </div>
+            )}
+
             {!jobSnapshot && (
               <>
                 <div className="apple-progress-track apple-progress-track--indeterminate" aria-hidden>
@@ -386,6 +407,8 @@ export function AnalysisView() {
         <p className="apple-caption">
           バックエンド: {health?.status ?? '…'}
           {ghidraCliFlag !== undefined && ` · Ghidra CLI: ${ghidraCliFlag ? '利用可能' : '未検出'}`}
+          {health?.auto_unpack !== undefined &&
+            ` · Auto-Unpack: ${health.auto_unpack ? '有効' : '無効'}`}
         </p>
       </section>
 

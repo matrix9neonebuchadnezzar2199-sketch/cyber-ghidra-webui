@@ -31,6 +31,21 @@ echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0
     || fail "ghidra_cli is not true — is this the backend image with Ghidra?"
 ok "backend up, ghidra_cli=true"
 
+info "Unipacker proxy health (GET /api/unpack/health)..."
+UH=$(curl -sf "$API/api/unpack/health") || fail "GET /api/unpack/health failed"
+echo "$UH" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' and d.get('service')=='unipacker-worker' else 1)" \
+    || fail "unipacker-worker not healthy: $UH"
+ok "unipacker-worker reachable"
+
+info "detect-packer (non-PE)..."
+NOTPE="/tmp/smoke_test_notpe.bin"
+printf 'not a PE' >"$NOTPE"
+DET=$(curl -sf -F "file=@${NOTPE}" "$API/api/detect-packer") || fail "POST /api/detect-packer failed"
+rm -f "$NOTPE"
+echo "$DET" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('is_pe') is False else 1)" \
+    || fail "detect-packer expected is_pe=false, got: $DET"
+ok "detect-packer non-PE"
+
 info "Upload: $(basename "$SAMPLE")"
 UPLOAD=$(curl -sf -X POST "$API/api/upload" -F "file=@${SAMPLE}") || fail "POST /api/upload failed"
 

@@ -32,6 +32,28 @@ try {
 if ($health.ghidra_cli -ne $true) { Fail "ghidra_cli is not true" }
 Ok "backend up, ghidra_cli=true"
 
+Info "Unipacker proxy health (GET /api/unpack/health)..."
+try {
+    $uh = Invoke-RestMethod -Uri "$Api/api/unpack/health" -Method Get
+} catch { Fail "GET /api/unpack/health failed" }
+if ($uh.status -ne "ok" -or $uh.service -ne "unipacker-worker") {
+    Fail "unipacker-worker not healthy: $($uh | ConvertTo-Json -Compress)"
+}
+Ok "unipacker-worker reachable"
+
+Info "detect-packer (non-PE)..."
+$notPe = Join-Path $env:TEMP "smoke_test_notpe.bin"
+[IO.File]::WriteAllBytes($notPe, [Text.Encoding]::ASCII.GetBytes("not a PE"))
+try {
+    $detJson = & curl.exe -sS -F "file=@$notPe" "$Api/api/detect-packer"
+} finally {
+    Remove-Item $notPe -Force -ErrorAction SilentlyContinue
+}
+if (-not $detJson) { Fail "POST /api/detect-packer failed" }
+$det = $detJson | ConvertFrom-Json
+if ($det.is_pe -ne $false) { Fail "detect-packer expected is_pe=false" }
+Ok "detect-packer non-PE"
+
 Info "Upload: $(Split-Path $Sample -Leaf)"
 $upJson = & curl.exe -sS -X POST "$Api/api/upload" -F "file=@$Sample"
 if (-not $upJson) { Fail "POST /api/upload failed" }
