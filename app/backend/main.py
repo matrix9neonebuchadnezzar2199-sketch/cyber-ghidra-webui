@@ -2,15 +2,18 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+import py7zr
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -27,6 +30,9 @@ ANNOTATED_SUFFIX = "_annotated.json"
 # Reject strategy=all when more than this many functions (sync LLM loop; avoid client timeouts)
 ANNOTATE_ALL_MAX_FUNCTIONS = int(os.environ.get("ANNOTATE_ALL_MAX_FUNCTIONS", "100"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200")) * 1024 * 1024
+MAX_EXTRACT_SIZE_MB = int(os.environ.get("MAX_EXTRACT_SIZE_MB", "500"))
+MAX_EXTRACT_BYTES = MAX_EXTRACT_SIZE_MB * 1024 * 1024
+DEFAULT_ARCHIVE_PASSWORD = "infected"
 
 
 class AnnotateBody(BaseModel):
@@ -145,6 +151,169 @@ def write_job_queue_atomic(job_id: str, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def _is_archive(filepath: Path, password: str = "") -> str | None:
+    """アーカイブ種別を返す。非アーカイブなら None。"""
+    try:
+        if zipfile.is_zipfile(str(filepath)):
+            return "zip"
+    except Exception:
+        pass
+    pwd_attempts: list[str | None] = []
+    if password:
+        pwd_attempts.append(password)
+    pwd_attempts.append(None)
+    tried: set[str | None] = set()
+    for pwd in pwd_attempts:
+        if pwd in tried:
+            continue
+        tried.add(pwd)
+        try:
+            with py7zr.SevenZipFile(str(filepath), mode="r", password=pwd) as _:
+                return "7z"
+        except Exception:
+            continue
+    return None
+
+
+def _safe_extract_name(name: str) -> str:
+    """パストラバーサル対策。ファイル名部分のみ返す。"""
+    return Path(name).name
+
+
+def _extract_archive(
+    filepath: Path,
+    password: str,
+    extract_dir: Path,
+    archive_type: str,
+) -> list[Path]:
+    """
+    アーカイブを展開し、展開されたファイルのパスリストを返す。
+    ZIP爆弾対策: 展開合計が MAX_EXTRACT_BYTES を超えたら中断。
+    ディレクトリ・隠しファイル・空ファイルはスキップ。
+    """
+    extracted: list[Path] = []
+    total_size = 0
+
+    if archive_type == "zip":
+        with zipfile.ZipFile(str(filepath), "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                safe_name = _safe_extract_name(info.filename)
+                if not safe_name or safe_name.startswith("."):
+                    continue
+                if info.file_size == 0:
+                    continue
+                total_size += info.file_size
+                if total_size > MAX_EXTRACT_BYTES:
+                    raise ValueError(
+                        "Archive exceeds max extract size (%d MB)" % MAX_EXTRACT_SIZE_MB
+                    )
+                pwd_bytes = password.encode("utf-8") if password else None
+                data = zf.read(info.filename, pwd=pwd_bytes)
+                out_path = extract_dir / safe_name
+                counter = 1
+                while out_path.exists():
+                    stem = Path(safe_name).stem
+                    suffix = Path(safe_name).suffix
+                    out_path = extract_dir / ("%s_%d%s" % (stem, counter, suffix))
+                    counter += 1
+                out_path.write_bytes(data)
+                extracted.append(out_path)
+
+    elif archive_type == "7z":
+        tmp_extract = extract_dir / "_7z_tmp"
+        with py7zr.SevenZipFile(str(filepath), mode="r", password=password or None) as sz:
+            for entry in sz.list():
+                if entry.is_directory:
+                    continue
+                uc = int(entry.uncompressed or 0)
+                total_size += uc
+                if total_size > MAX_EXTRACT_BYTES:
+                    raise ValueError(
+                        "Archive exceeds max extract size (%d MB)" % MAX_EXTRACT_SIZE_MB
+                    )
+            tmp_extract.mkdir(exist_ok=True)
+            sz.extractall(path=str(tmp_extract))
+        try:
+            for f in tmp_extract.rglob("*"):
+                if f.is_dir():
+                    continue
+                safe_name = _safe_extract_name(f.name)
+                if not safe_name or safe_name.startswith("."):
+                    continue
+                if f.stat().st_size == 0:
+                    continue
+                out_path = extract_dir / safe_name
+                counter = 1
+                while out_path.exists():
+                    stem = Path(safe_name).stem
+                    suffix = Path(safe_name).suffix
+                    out_path = extract_dir / ("%s_%d%s" % (stem, counter, suffix))
+                    counter += 1
+                shutil.move(str(f), str(out_path))
+                extracted.append(out_path)
+        finally:
+            shutil.rmtree(str(tmp_extract), ignore_errors=True)
+
+    return extracted
+
+
+def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
+    """
+    単一バイナリからジョブを作成しキューに登録する。
+    upload_binary の非アーカイブ経路と同一のペイロード・ステータス更新。
+    """
+    hashes = compute_hashes(src)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = f"{timestamp}_{src.name}"
+    dest = INPUT_DIR / safe_name
+    counter = 1
+    while dest.exists():
+        dest = INPUT_DIR / ("%s_%d%s" % (Path(safe_name).stem, counter, Path(safe_name).suffix))
+        counter += 1
+    shutil.move(str(src), str(dest))
+
+    project_name = f"p_{hashes['sha256'][:16]}"
+    job_id = str(uuid.uuid4())
+    created = datetime.now().isoformat()
+
+    record: dict[str, Any] = {
+        "job_id": job_id,
+        "status": "queued",
+        "filename": dest.name,
+        "sha256": hashes["sha256"],
+        "created": created,
+        "updated": created,
+    }
+    jobs[job_id] = record
+    write_status_atomic(job_id, record)
+
+    job_payload = {
+        "job_id": job_id,
+        "filepath": str(dest),
+        "project_name": project_name,
+        "filename": dest.name,
+        "sha256": hashes["sha256"],
+        "created": created,
+    }
+    try:
+        write_job_queue_atomic(job_id, job_payload)
+    except OSError as exc:
+        record["status"] = "failed"
+        record["error"] = f"queue write failed: {exc}"
+        record["updated"] = datetime.now().isoformat()
+        jobs[job_id] = record
+        write_status_atomic(job_id, record)
+        raise HTTPException(status_code=503, detail="Could not enqueue analysis job") from exc
+
+    return {
+        "job_id": job_id,
+        "filename": dest.name,
+        "sha256": hashes["sha256"],
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -182,7 +351,10 @@ async def health_check():
 
 
 @app.post("/api/upload")
-async def upload_binary(file: UploadFile = File(...)):
+async def upload_binary(
+    file: UploadFile = File(...),
+    archive_password: str = Form(default=DEFAULT_ARCHIVE_PASSWORD),
+):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
@@ -212,6 +384,51 @@ async def upload_binary(file: UploadFile = File(...)):
     except Exception as exc:
         filepath.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Upload failed: %s" % exc) from exc
+
+    archive_type = _is_archive(filepath, archive_password)
+    if archive_type is not None:
+        extract_dir = Path(tempfile.mkdtemp(dir=str(INPUT_DIR)))
+        try:
+            files = _extract_archive(filepath, archive_password, extract_dir, archive_type)
+        except ValueError as exc:
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
+            filepath.unlink(missing_ok=True)
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except Exception as exc:
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
+            filepath.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail="Archive extraction failed: %s" % str(exc),
+            ) from exc
+
+        if not files:
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
+            filepath.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="No files found in archive")
+
+        filepath.unlink(missing_ok=True)
+
+        jobs_out: list[dict[str, Any]] = []
+        try:
+            for f in files:
+                jobs_out.append(_enqueue_binary_from_path(f))
+        finally:
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
+
+        return {
+            "archive": True,
+            "archive_type": archive_type,
+            "jobs": [
+                {
+                    "job_id": j["job_id"],
+                    "filename": j["filename"],
+                    "sha256": j["sha256"],
+                }
+                for j in jobs_out
+            ],
+            "count": len(jobs_out),
+        }
 
     hashes = compute_hashes(filepath)
     project_name = f"p_{hashes['sha256'][:16]}"

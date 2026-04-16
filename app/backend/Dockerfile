@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     unzip \
     ca-certificates \
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 ARG GHIDRA_VERSION=11.3.1

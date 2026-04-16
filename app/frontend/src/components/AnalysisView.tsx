@@ -60,6 +60,7 @@ export function AnalysisView() {
   } | null>(null);
 
   const [elapsedPulse, setElapsedPulse] = useState(0);
+  const [archivePassword, setArchivePassword] = useState('infected');
 
   const loadHealth = useCallback(async () => {
     try {
@@ -130,12 +131,26 @@ export function AnalysisView() {
     setMessage(null);
     const fd = new FormData();
     fd.append('file', files[0]);
+    fd.append('archive_password', archivePassword);
     try {
       const r = await fetch(`${apiBase}/api/upload`, { method: 'POST', body: fd });
-      const data = await r.json();
+      const data = (await r.json()) as Record<string, unknown>;
       if (!r.ok) {
         setActiveJob(null);
         setMessage(typeof data.detail === 'string' ? data.detail : JSON.stringify(data));
+      } else if (data.archive === true) {
+        const count = typeof data.count === 'number' ? data.count : 0;
+        setMessage(`アーカイブから ${count} 件のバイナリを検出しました`);
+        const jobs = data.jobs as { job_id: string; filename: string }[] | undefined;
+        if (jobs && jobs.length > 0) {
+          setActiveJob({
+            id: jobs[0].job_id,
+            filename: jobs[0].filename,
+            startedAt: Date.now(),
+          });
+        } else {
+          setActiveJob(null);
+        }
       } else {
         setActiveJob({
           id: data.job_id as string,
@@ -200,6 +215,23 @@ export function AnalysisView() {
             <RefreshCw size={16} aria-hidden />
             接続確認
           </button>
+        </div>
+        <div className="apple-settings-row" style={{ marginTop: 10 }}>
+          <span className="apple-api-hint" style={{ whiteSpace: 'nowrap' }}>
+            アーカイブパスワード
+          </span>
+          <input
+            type="text"
+            value={archivePassword}
+            onChange={(e) => setArchivePassword(e.target.value)}
+            className="apple-settings-input"
+            style={{ flex: '0 1 12rem', minWidth: '8rem', fontSize: 13, padding: '6px 10px' }}
+            placeholder="infected"
+            disabled={busy}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="アーカイブパスワード"
+          />
         </div>
         {message && <p className="apple-msg">{message}</p>}
 
