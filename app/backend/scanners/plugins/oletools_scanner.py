@@ -3,6 +3,7 @@ oletools を使った Office ドキュメントのマルウェア検査。
 検出項目: VBA マクロ、AutoOpen/AutoExec、DDE リンク、
           疑わしい API (Shell, WScript.Shell 等)、OLE 埋め込みオブジェクト
 """
+
 from __future__ import annotations
 
 import logging

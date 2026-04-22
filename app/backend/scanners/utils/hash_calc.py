@@ -1,4 +1,5 @@
 """ファイルのハッシュ値を計算"""
+
 from __future__ import annotations
 
 import hashlib

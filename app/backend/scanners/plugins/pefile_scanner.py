@@ -3,10 +3,11 @@ pefile を使った Windows PE ファイルの静的解析。
 検出項目: 高エントロピーセクション（パック検出）、不審なインポート、
           タイムスタンプ異常、セクション名異常
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pefile
@@ -75,9 +76,9 @@ class PefileScanner(BaseScanner):
 
         # タイムスタンプ異常検出
         try:
-            ts = datetime.fromtimestamp(pe.FILE_HEADER.TimeDateStamp, tz=timezone.utc)
+            ts = datetime.fromtimestamp(pe.FILE_HEADER.TimeDateStamp, tz=UTC)
             metadata["compile_time"] = ts.isoformat()
-            if ts.year < 2000 or ts > datetime.now(tz=timezone.utc):
+            if ts.year < 2000 or ts > datetime.now(UTC):
                 findings.append(
                     Finding(
                         rule="pe_suspicious_timestamp",

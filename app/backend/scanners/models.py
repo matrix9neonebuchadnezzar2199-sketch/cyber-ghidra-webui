@@ -1,4 +1,5 @@
 """API リクエスト/レスポンスの Pydantic モデル"""
+
 from __future__ import annotations
 
 from typing import Any

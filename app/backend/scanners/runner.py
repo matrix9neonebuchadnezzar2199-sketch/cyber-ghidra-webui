@@ -2,6 +2,7 @@
 アップロードされたファイルに対して該当するスキャナーを実行し、
 結果を統合して返すオーケストレーター。
 """
+
 from __future__ import annotations
 
 import logging

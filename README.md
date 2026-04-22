@@ -102,7 +102,66 @@ curl http://localhost:8000/api/annotate/result/{annotate_id}
 | `LLM_USE_JSON_MODE` | `1` | JSON モードを要求するか |
 | `ANNOTATE_ALL_MAX_FUNCTIONS` | `100` | `strategy=all` の上限 |
 
-## スモークテスト
+## 静的解析スキャナー（`GET/POST /api/scan/*`）
+
+アップロード済みジョブの検体に対し、oletools / pdfid / pefile / LIEF / capa / binwalk / androguard 等の**静的解析**をバックエンド上で実行します（YARA は未実装スタブ）。Ghidra 解析完了を待たず、キュー登録直後に実行可能です（検体が `/app/input` 上に存在する必要があります）。
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| `GET` | `/api/scan/scanners` | 登録済みスキャナー一覧（`name` / `supported_types` / `match_all`） |
+| `POST` | `/api/scan/{job_id}` | 当該ジョブのファイルをスキャン。body `{"scanners": ["pdfid", ...]}` 省略時は MIME に応じ自動選択 |
+
+**検体パス解決**: `queue/pending` / `queue/processing` / `queue/done` いずれかの `{job_id}.json` 内 `filepath`、または `output/{job_id}.status.json` の `filename` から `/app/input` 上の実ファイルを参照します。
+
+`curl` の例（`job_id` をアップロードレスポンスの値に置き換え）:
+
+```bash
+curl -sS http://localhost:8000/api/scan/scanners
+curl -sS -X POST "http://localhost:8000/api/scan/YOUR_JOB_ID" \
+  -H "Content-Type: application/json" -d '{}'
+# 特定スキャナーのみ: -d '{"scanners":["pdfid","binwalk"]}'
+```
+
+依存追加は `app/backend/requirements.txt` 経由のため、変更後は **`docker compose build backend`（`ghidra-worker` を触った場合は併せて再ビルド）**を実行してください。Docker イメージに `binwalk` と `libmagic1` が含まれます。
+
+## テスト（バックエンド・スキャナー）
+
+`app/backend` をカレントにし、仮想環境で依存を入れたうえで実行します。
+
+```bash
+cd app/backend
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest
+# またはプロジェクトルートから一括
+bash scripts/quality_check.sh
+```
+
+- テスト本体: `app/backend/scanners/tests/`（レジストリ、runner、プラグイン、**FastAPI 経由の API 結合**を含む）
+- `oletools` の警告（pyparsing 非推奨）が表示される場合があります（依存側の挙動）
+
+## コード品質（Ruff）
+
+[Ruff](https://docs.astral.sh/ruff/) による `lint` と `format` の確認を行います。`pyproject.toml` は `app/backend` にあり、レガシー行の `main.py` / `worker.py` / `annotator.py` は**除外**（新規 `scanners/` 等の品質にフォーカス）しています。
+
+```bash
+cd app/backend
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check .
+ruff format --check .
+```
+
+Windows / Linux 共通の一括実行: `scripts/quality_check.ps1` または `scripts/quality_check.sh`（`ruff check` → `ruff format --check` → `pytest`）。
+
+## スモークテスト（E2E）
 
 - WSL2 / Linux: `bash scripts/smoke_test.sh`（引数省略時は `/bin/ls` のコピーを使用）
 - Windows: `powershell -File scripts/smoke_test.ps1`（アップロードに `curl.exe` を使用。プロキシが異なる環境では `Invoke-RestMethod` へ統一するなど調整してください）
+
+フローは「ヘルス → unipacker → 検体アップロード → ジョブ完了まで待機」です。静的解析 API は上記 **「静的解析スキャナー」** または結合テスト（`scanners/tests/test_api_integration.py`）で補完できます。
+
+### 想定操作フロー（参考）
+
+1. ブラウザで検体をアップロード（または `POST /api/upload`）し `job_id` を取得
+2. （任意）`POST /api/scan/{job_id}` で静的分析を実行
+3. Ghidra 完了待ち `GET /api/jobs/{job_id}` まで待機
+4. （任意）`POST /api/annotate/{job_id}` で LLM 注釈

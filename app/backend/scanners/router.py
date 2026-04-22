@@ -2,6 +2,7 @@
 /api/scan/* エンドポイント定義。
 既存の main.py に `app.include_router(scan_router)` の 1行を追加するだけで有効化される。
 """
+
 from __future__ import annotations
 
 import json
@@ -68,7 +69,7 @@ def _resolve_file_path(job_id: str) -> Path:
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
 
-    raise FileNotFoundError("File for job_id=%s not found" % job_id)
+    raise FileNotFoundError(f"File for job_id={job_id} not found")
 
 
 @router.post("/{job_id}", response_model=ScanResponse)
@@ -85,7 +86,7 @@ def scan_file(
     except FileNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail="Job %s の検体ファイルが見つかりません" % job_id,
+            detail=f"Job {job_id} の検体ファイルが見つかりません",
         ) from None
 
     scanner_names = body.scanners if body else None

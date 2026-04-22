@@ -2,6 +2,7 @@
 pdfid を使った PDF ドキュメントの悪性コード検査。
 検出項目: /JS, /JavaScript, /OpenAction, /AA, /Launch, /RichMedia, /XFA, /JBIG2Decode
 """
+
 from __future__ import annotations
 
 import json

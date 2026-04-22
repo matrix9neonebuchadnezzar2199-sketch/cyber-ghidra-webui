@@ -3,6 +3,7 @@ scanners/plugins/ 配下の全モジュールを自動インポートし、
 BaseScanner のサブクラスを自動登録するレジストリ。
 新しいプラグインは plugins/ にファイルを置くだけで認識される。
 """
+
 from __future__ import annotations
 
 import importlib

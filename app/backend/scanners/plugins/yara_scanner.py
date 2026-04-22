@@ -2,6 +2,7 @@
 YARA スキャナー: 後日実装予定のスタブ。
 実装時は yara-python をインストールし、以下の TODO を埋めること。
 """
+
 from __future__ import annotations
 
 import logging

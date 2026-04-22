@@ -1,0 +1,28 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["."]
+# 既存のエントリポイント等は従来の % 書式のまま維持し、新規 modules のみ厳格に
+exclude = [
+  "main.py",
+  "worker.py",
+  "annotator.py",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # Pyflakes
+  "I",   # isort
+  "W",   # pycodestyle warnings
+  "UP",  # pyupgrade
+  "B",   # flake8-bugbear
+]
+ignore = [
+  "B008",  # FastAPI Body() in defaults is intentional
+]
+
+[tool.pytest.ini_options]
+testpaths = ["scanners/tests"]
+pythonpath = ["."]
+addopts = "-q --tb=short"

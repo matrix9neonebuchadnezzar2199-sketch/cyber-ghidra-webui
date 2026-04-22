@@ -2,6 +2,7 @@
 LIEF を使った ELF / Mach-O / PE のクロスプラットフォーム解析。
 PE は pefile_scanner と補完関係にあり、ELF / Mach-O のカバーが主目的。
 """
+
 from __future__ import annotations
 
 import logging
@@ -121,7 +122,10 @@ class LiefScanner(BaseScanner):
                 findings.append(
                     Finding(
                         rule="lief_high_entropy_section",
-                        description=f"Section '{sec.name}' entropy={ent:.2f} — possible packed/encrypted content",
+                        description=(
+                            f"Section '{sec.name}' entropy={ent:.2f} — "
+                            "possible packed/encrypted content"
+                        ),
                         risk=RiskLevel.HIGH,
                         details={"section": str(sec.name), "entropy": round(ent, 3)},
                     )

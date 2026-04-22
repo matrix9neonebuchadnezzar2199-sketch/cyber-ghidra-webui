@@ -1,6 +1,7 @@
 """
 binwalk を使ったファームウェア/バイナリ内の埋め込みファイル検出。
 """
+
 from __future__ import annotations
 
 import logging

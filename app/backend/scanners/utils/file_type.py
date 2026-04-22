@@ -1,4 +1,8 @@
-"""python-magic でファイルの MIME タイプを判定（libmagic 非利用環境は mimetypes にフォールバック）"""
+"""ファイルの MIME タイプを判定。
+
+python-magic (libmagic) を優先し、利用不可時は mimetypes にフォールバックする。
+"""
+
 import mimetypes
 from pathlib import Path
 

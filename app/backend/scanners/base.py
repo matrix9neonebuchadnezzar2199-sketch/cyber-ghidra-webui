@@ -3,17 +3,18 @@
 新しいスキャナーを追加する際はこのクラスを継承し、
 SCANNER_NAME / SUPPORTED_TYPES / scan() を実装するだけで良い。
 """
+
 from __future__ import annotations
 
 import abc
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     SAFE = "safe"
     LOW = "low"
     MEDIUM = "medium"

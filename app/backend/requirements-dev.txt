@@ -1,0 +1,2 @@
+# 開発用: pip install -r requirements.txt -r requirements-dev.txt
+ruff>=0.8.0

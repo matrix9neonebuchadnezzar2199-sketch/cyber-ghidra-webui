@@ -2,6 +2,7 @@
 Mandiant capa を使った実行ファイルの機能/振る舞い自動検出。
 ※ capa は CLI ラッパーとして呼び出す（Python API が安定していないため）。
 """
+
 from __future__ import annotations
 
 import json

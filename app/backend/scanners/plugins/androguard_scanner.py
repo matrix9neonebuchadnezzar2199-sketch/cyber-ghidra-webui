@@ -2,6 +2,7 @@
 Androguard を使った Android APK の静的解析。
 検出項目: 危険な権限、コンポーネント一覧、署名検証
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -109,7 +110,10 @@ class AndroguardScanner(BaseScanner):
             findings.append(
                 Finding(
                     rule="apk_sms_bot_combo",
-                    description="Suspicious combo: SEND_SMS + INTERNET + RECEIVE_BOOT_COMPLETED (potential SMS bot)",
+                    description=(
+                        "Suspicious combo: SEND_SMS + INTERNET + "
+                        "RECEIVE_BOOT_COMPLETED (potential SMS bot)"
+                    ),
                     risk=RiskLevel.CRITICAL,
                     details={"permissions": list(sms_combo)},
                 )
