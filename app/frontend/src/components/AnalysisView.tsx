@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FileUp, Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, FileUp, Loader2, RefreshCw, ScanLine, XCircle } from 'lucide-react';
 import { useApiBase } from '../context/ApiContext';
 import { useAnalysisResult } from '../context/AnalysisResultContext';
 import { AnalysisDetail } from './analysis/AnalysisDetail';
@@ -16,6 +16,11 @@ type JobStatus = {
   error?: string;
   analysis_json?: string;
   updated?: string;
+  /** ghidra: ワーカーが analyzeHeadless。static_only: 拡張子/MIME で静的分析のみ */
+  analysis_mode?: 'ghidra' | 'static_only';
+  static_scan?: Record<string, unknown>;
+  ghidra_skipped?: boolean;
+  detected_file_type?: string;
   unpack_info?: {
     attempted?: boolean;
     unpacked?: boolean;
@@ -41,6 +46,16 @@ function statusLabelJa(status: string): string {
     default:
       return status;
   }
+}
+
+function jobStatusLine(status: string, mode?: 'ghidra' | 'static_only') {
+  if (mode === 'static_only' && status === 'completed') {
+    return '静的分析が完了しました（Ghidra は起動しません）';
+  }
+  if (mode === 'static_only' && status === 'failed') {
+    return '静的分析に失敗しました';
+  }
+  return statusLabelJa(status);
 }
 
 export function AnalysisView() {
@@ -73,6 +88,9 @@ export function AnalysisView() {
 
   const [elapsedPulse, setElapsedPulse] = useState(0);
   const [archivePassword, setArchivePassword] = useState('infected');
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanSummary, setScanSummary] = useState<string | null>(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -104,6 +122,10 @@ export function AnalysisView() {
             window.clearInterval(pollRef.current);
             pollRef.current = null;
           }
+          if (data.status === 'completed' && data.analysis_mode === 'static_only' && data.static_scan) {
+            setScanSummary(JSON.stringify(data.static_scan, null, 2));
+            return;
+          }
           if (data.status === 'completed' && data.analysis_json) {
             const ok = await loadResultFile(data.analysis_json);
             if (!ok) setMessage(`結果を開けませんでした: ${data.analysis_json}`);
@@ -126,10 +148,11 @@ export function AnalysisView() {
 
   useEffect(() => {
     if (!activeJob || !jobSnapshot) return;
+    if (jobSnapshot.analysis_mode === 'static_only') return;
     if (jobSnapshot.status !== 'queued' && jobSnapshot.status !== 'running') return;
     const id = window.setInterval(() => setElapsedPulse((t) => t + 1), 500);
     return () => window.clearInterval(id);
-  }, [activeJob, jobSnapshot?.status]);
+  }, [activeJob, jobSnapshot?.status, jobSnapshot?.analysis_mode]);
 
   const elapsedSec = useMemo(() => {
     if (!activeJob || !jobSnapshot) return 0;
@@ -137,11 +160,37 @@ export function AnalysisView() {
     return Math.floor((Date.now() - activeJob.startedAt) / 1000);
   }, [activeJob, jobSnapshot, elapsedPulse]);
 
+  const runStaticScan = useCallback(async () => {
+    if (!activeJob?.id) return;
+    setScanBusy(true);
+    setScanError(null);
+    setScanSummary(null);
+    try {
+      const r = await fetch(
+        `${apiBase}/api/scan/${encodeURIComponent(activeJob.id)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      );
+      const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!r.ok) {
+        const d = data?.detail;
+        setScanError(typeof d === 'string' ? d : r.statusText || '静的分析に失敗しました');
+        return;
+      }
+      setScanSummary(JSON.stringify(data, null, 2));
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : '静的分析のリクエストに失敗しました');
+    } finally {
+      setScanBusy(false);
+    }
+  }, [apiBase, activeJob?.id]);
+
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
     setMessage(null);
     setStatusMessage(null);
+    setScanError(null);
+    setScanSummary(null);
     const fd = new FormData();
     fd.append('file', files[0]);
     fd.append('archive_password', archivePassword);
@@ -163,11 +212,30 @@ export function AnalysisView() {
           setMessage(null);
           setStatusMessage(`アーカイブから ${count} 件のバイナリを検出しました`);
           if (jobsList.length > 0) {
-            const j0 = jobsList[0] as { job_id?: unknown; filename?: unknown };
+            const j0 = jobsList[0] as {
+              job_id?: unknown;
+              filename?: unknown;
+              analysis_mode?: unknown;
+              static_scan?: unknown;
+            };
             const jid = typeof j0.job_id === 'string' ? j0.job_id : '';
             const fn = typeof j0.filename === 'string' ? j0.filename : '';
+            const jmode = j0.analysis_mode === 'static_only' ? 'static_only' : 'ghidra';
             if (jid) {
               setActiveJob({ id: jid, filename: fn, startedAt: Date.now() });
+              if (j0.static_scan && typeof j0.static_scan === 'object' && jmode === 'static_only') {
+                setScanSummary(JSON.stringify(j0.static_scan, null, 2));
+              }
+              if (jmode === 'static_only') {
+                const jr = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(jid)}`);
+                if (jr.ok) {
+                  setJobSnapshot((await jr.json()) as JobStatus);
+                } else {
+                  setJobSnapshot(null);
+                }
+              } else {
+                setJobSnapshot(null);
+              }
             } else {
               setActiveJob(null);
             }
@@ -183,6 +251,21 @@ export function AnalysisView() {
             setMessage('アップロード応答が不正です（job_id がありません）');
           } else {
             setActiveJob({ id: jid, filename: fn, startedAt: Date.now() });
+            if (data.analysis_mode === 'static_only') {
+              const r = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(jid)}`);
+              if (r.ok) {
+                setJobSnapshot((await r.json()) as JobStatus);
+              } else {
+                setJobSnapshot(null);
+              }
+              if (data.static_scan && typeof data.static_scan === 'object') {
+                setScanSummary(JSON.stringify(data.static_scan, null, 2));
+              } else {
+                setScanSummary(null);
+              }
+            } else {
+              setJobSnapshot(null);
+            }
           }
         }
       }
@@ -210,12 +293,28 @@ export function AnalysisView() {
 
   const ghidraCliFlag = health?.ghidra_cli ?? health?.ghidra;
 
+  const jobIsStaticOnly = jobSnapshot?.analysis_mode === 'static_only';
+  const jobHeaderTitle = !jobSnapshot
+    ? '解析ジョブ'
+    : jobIsStaticOnly
+      ? '静的分析ジョブ'
+      : 'Ghidra 解析ジョブ';
+  const showGhidraProgress = Boolean(
+    jobSnapshot && !jobIsStaticOnly && (jobSnapshot.status === 'queued' || jobSnapshot.status === 'running'),
+  );
+
   return (
     <div className="apple-analyze">
       <section className="apple-analyze-hero">
         <h2 className="apple-analyze-title">解析</h2>
         <p className="apple-analyze-lead">
-          検体をアップロードするとワーカーが Ghidra Headless で解析し、関数ツリー・逆コンパイル・文字列・インポートを参照できます。
+          下の「検体を選ぶ」は<strong>1 か所の受け口</strong>です。<strong>PE/ELF 等</strong>は主に
+          <strong> Ghidra</strong> へ、<strong>PDF / Office</strong> 等は拡張子と種別で
+          <strong> 静的分析</strong>へ、バックエンドが振り分けます（同じ欄に ZIP/7z も可能。上限はサーバ方針に従います）。
+        </p>
+        <p className="apple-analyze-hint">
+          ジョブ欄の見出しが <strong>「Ghidra 解析」</strong> か <strong>「静的分析」</strong> かで処理が分かれます。PDF/Office
+          で Ghidra が出ないのは想定動作です。Ghidra 用の待ちバーはネイティブ系ジョブにだけ表示されます。
         </p>
       </section>
 
@@ -227,12 +326,13 @@ export function AnalysisView() {
             ) : (
               <FileUp size={18} aria-hidden />
             )}
-            バイナリを選択
+            検体を選択
             <input
               type="file"
               className="apple-file-input"
               disabled={busy}
               onChange={(e) => void onUpload(e.target.files)}
+              title="PE/ELF・PDF/Office・ZIP/7z 等（1 件ずつ）"
             />
           </label>
           <button
@@ -285,10 +385,26 @@ export function AnalysisView() {
         {activeJob?.id && (
           <div className="apple-job-panel" role="status" aria-live="polite">
             <div className="apple-job-panel-header">
-              <span className="apple-job-title">解析ジョブ</span>
+              <span className="apple-job-title">{jobHeaderTitle}</span>
               <span className="apple-job-id">{activeJob.id.slice(0, 8)}…</span>
             </div>
+            {!jobIsStaticOnly && jobSnapshot && (
+              <p className="apple-job-note" role="note">
+                待ち・進行・失敗（％付き）の表示は<strong>ワーカー上の Ghidra Headless</strong> 向けです。
+              </p>
+            )}
+            {jobIsStaticOnly && jobSnapshot && (
+              <p className="apple-job-note" role="note">
+                このファイルは <strong>静的分析のみ</strong>です。Ghidra
+                ワーカーはキューに乗りません。結果は下の「静的分析」枠の JSON です。
+              </p>
+            )}
             <p className="apple-job-file">{activeJob.filename}</p>
+            {jobIsStaticOnly && jobSnapshot?.detected_file_type ? (
+              <p className="apple-job-detected" style={{ fontSize: 13, opacity: 0.9, marginTop: 4 }}>
+                推定: {String(jobSnapshot.detected_file_type)}
+              </p>
+            ) : null}
 
             {jobSnapshot?.unpack_info?.attempted && (
               <div className="apple-unpack-badge" role="status">
@@ -326,7 +442,7 @@ export function AnalysisView() {
               </>
             )}
 
-            {jobSnapshot && (jobSnapshot.status === 'queued' || jobSnapshot.status === 'running') && (
+            {showGhidraProgress && jobSnapshot && (
               <>
                 {jobSnapshot.status === 'running' &&
                 typeof jobSnapshot.progress_percent === 'number' &&
@@ -378,11 +494,17 @@ export function AnalysisView() {
                 {jobSnapshot.status === 'failed' && (
                   <XCircle className="apple-job-icon apple-job-icon--err" aria-hidden />
                 )}
-                {(jobSnapshot.status === 'queued' || jobSnapshot.status === 'running') && (
-                  <Loader2 className="apple-job-icon apple-spin" aria-hidden />
-                )}
+                {jobSnapshot.analysis_mode !== 'static_only' &&
+                  (jobSnapshot.status === 'queued' || jobSnapshot.status === 'running') && (
+                    <Loader2 className="apple-job-icon apple-spin" aria-hidden />
+                  )}
                 <div>
-                  <p className="apple-job-status">{statusLabelJa(jobSnapshot.status)}</p>
+                  <p className="apple-job-status">
+                    {jobStatusLine(
+                      jobSnapshot.status,
+                      jobSnapshot.analysis_mode === 'static_only' ? 'static_only' : 'ghidra',
+                    )}
+                  </p>
                   {jobSnapshot.status === 'running' && typeof jobSnapshot.progress_percent === 'number' && (
                     <p className="apple-job-progress-pct">進捗 約 {Math.round(jobSnapshot.progress_percent)} ％</p>
                   )}
@@ -393,7 +515,8 @@ export function AnalysisView() {
               </div>
             )}
 
-            {jobSnapshot?.progress_message &&
+            {jobSnapshot?.analysis_mode !== 'static_only' &&
+              jobSnapshot?.progress_message &&
               (jobSnapshot.status === 'queued' ||
                 jobSnapshot.status === 'running' ||
                 jobSnapshot.status === 'failed') && (
@@ -404,6 +527,43 @@ export function AnalysisView() {
               <p className="apple-job-error">{jobSnapshot.error}</p>
             )}
 
+            <div className="apple-static-scan" role="region" aria-label="静的分析">
+              <h4 className="apple-static-scan-title">
+                <ScanLine size={16} aria-hidden className="apple-static-scan-ico" />
+                静的分析（スキャンモジュール）
+              </h4>
+              <p className="apple-static-scan-hint">
+                {jobIsStaticOnly && jobSnapshot?.status === 'completed' ? (
+                  <>
+                    このルートはアップロード直後に<strong>自動で</strong>静的分析済みです。Ghidra とは
+                    <strong>別</strong>のバックエンド（oletools / pdfid / pefile 等。サーバ設定）です。再取得するには下のボタン。
+                  </>
+                ) : (
+                  <>
+                    Ghidra とは<strong>別</strong>のバックエンド処理です。PDF/Office/PE
+                    など形式に応じスキャンが走ります（サーバ設定による）。PDF/Office は主にこちらが本線です。
+                  </>
+                )}
+              </p>
+              <div className="apple-static-scan-actions">
+                <button
+                  type="button"
+                  className="apple-btn apple-btn-outline"
+                  disabled={scanBusy}
+                  onClick={() => void runStaticScan()}
+                >
+                  {scanBusy ? <Loader2 size={16} className="apple-spin" aria-hidden /> : null}
+                  静的分析を実行
+                </button>
+                {scanError && <p className="apple-static-scan-err">{scanError}</p>}
+              </div>
+              {scanSummary && (
+                <pre className="apple-static-scan-pre" tabIndex={0}>
+                  {scanSummary}
+                </pre>
+              )}
+            </div>
+
             <button
               type="button"
               className="apple-btn apple-btn-outline apple-job-dismiss"
@@ -411,6 +571,8 @@ export function AnalysisView() {
                 setActiveJob(null);
                 setJobSnapshot(null);
                 setStatusMessage(null);
+                setScanError(null);
+                setScanSummary(null);
               }}
             >
               閉じる
@@ -481,7 +643,10 @@ export function AnalysisView() {
 
       {!analysisData && (
         <p className="apple-analyze-empty">
-          まだ解析データがありません。検体をアップロードするか、履歴から結果を開いてください。
+          まだ <strong>Ghidra 由来の逆解析</strong>（関数ツリー等）がありません。上で
+          <strong>ネイティブ実行形式</strong>の検体を送るとワーカー解析後に表示されます。PDF/Office
+          など静的分析ジョブではこのエリアは空のままが基本です。ジョブ欄の
+          <strong>静的分析 JSON</strong>をご利用ください。履歴から従来の解析を開くこともできます。
         </p>
       )}
     </div>

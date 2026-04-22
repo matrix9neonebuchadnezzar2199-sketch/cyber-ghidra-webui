@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from annotator import annotate_function, select_target_functions
 from packer_detect import is_pe_file, quick_packer_heuristic
+from sample_pipeline import classify_sample_pipeline, run_static_scan_on_disk
 from scanners.router import router as scan_router
 
 INPUT_DIR = Path("/app/input")
@@ -336,6 +337,64 @@ async def _try_unpack(filepath: Path) -> dict[str, Any]:
         return result
 
 
+async def _finalize_static_only_job(
+    sample_path: Path,
+    display_filename: str,
+    unpack_info: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    検体のパスが /app/input 上（または一時的に残ったパス）のとき、
+    Ghidra を起動せず即時に run_scan してジョブを complete にする。
+    """
+    job_id = str(uuid.uuid4())
+    created = datetime.now().isoformat()
+    hashes = compute_hashes(sample_path)
+    outcome = await run_static_scan_on_disk(sample_path)
+
+    base: dict[str, Any] = {
+        "job_id": job_id,
+        "filename": display_filename,
+        "sha256": hashes["sha256"],
+        "created": created,
+        "updated": datetime.now().isoformat(),
+        "analysis_mode": "static_only",
+        "ghidra_skipped": True,
+        "unpack_info": unpack_info,
+    }
+    if outcome.get("error"):
+        record: dict[str, Any] = {
+            **base,
+            "status": "failed",
+            "error": outcome.get("error", "static scan failed"),
+        }
+    else:
+        record = {
+            **base,
+            "status": "completed",
+            "static_scan": outcome.get("static_scan", {}),
+            "detected_file_type": str(outcome.get("file_type", "")),
+        }
+
+    jobs[job_id] = record
+    write_status_atomic(job_id, record)
+
+    res: dict[str, Any] = {
+        "status": "failed" if outcome.get("error") else "completed",
+        "job_id": job_id,
+        "filename": display_filename,
+        "hashes": hashes,
+        "sha256": hashes.get("sha256", ""),
+        "analysis_mode": "static_only",
+        "unpack_info": unpack_info,
+        "message": "Ghidra ワーカーは使用せず、拡張子/種別に基づき静的分析を実行しました。",
+    }
+    if outcome.get("error"):
+        res["error"] = str(outcome["error"])
+    else:
+        res["static_scan"] = outcome.get("static_scan", {})
+    return res
+
+
 async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
     """
     単一バイナリからジョブを作成しキューに登録する。
@@ -371,6 +430,21 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         except OSError:
             pass
 
+    uinfo = {
+        "attempted": bool(unpack_info.get("remote_attempted")),
+        "unpacked": bool(unpack_info.get("unpacked")),
+        "packer_chain": str(unpack_info.get("packer_chain", "")),
+        "total_layers": int(unpack_info.get("total_layers", 0) or 0),
+        "original_sha256": str(unpack_info.get("original_sha256", "")),
+        "reason": str(unpack_info.get("reason", "")),
+    }
+    if classify_sample_pipeline(dest) == "static_only":
+        return await _finalize_static_only_job(
+            dest,
+            display_filename=dest.name,
+            unpack_info=uinfo,
+        )
+
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
     created = datetime.now().isoformat()
@@ -382,14 +456,8 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "sha256": hashes["sha256"],
         "created": created,
         "updated": created,
-        "unpack_info": {
-            "attempted": bool(unpack_info.get("remote_attempted")),
-            "unpacked": bool(unpack_info.get("unpacked")),
-            "packer_chain": str(unpack_info.get("packer_chain", "")),
-            "total_layers": int(unpack_info.get("total_layers", 0) or 0),
-            "original_sha256": str(unpack_info.get("original_sha256", "")),
-            "reason": str(unpack_info.get("reason", "")),
-        },
+        "analysis_mode": "ghidra",
+        "unpack_info": uinfo,
     }
     jobs[job_id] = record
     write_status_atomic(job_id, record)
@@ -417,6 +485,7 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
         "job_id": job_id,
         "filename": dest.name,
         "sha256": hashes["sha256"],
+        "analysis_mode": "ghidra",
         "unpack_info": record["unpack_info"],
     }
 
@@ -547,8 +616,11 @@ async def upload_binary(
                     {
                         "job_id": j["job_id"],
                         "filename": j["filename"],
-                        "sha256": j["sha256"],
+                        "sha256": j.get("sha256") or (j.get("hashes") or {}).get("sha256", ""),
+                        "analysis_mode": j.get("analysis_mode", "ghidra"),
                         "unpack_info": j.get("unpack_info"),
+                        "static_scan": j.get("static_scan"),
+                        "error": j.get("error"),
                     }
                     for j in jobs_out
                 ],
@@ -582,6 +654,38 @@ async def upload_binary(
         analysis_target = Path(str(unpack_info["unpacked_path"]))
 
     hashes = compute_hashes(analysis_target)
+    uinfo = {
+        "attempted": bool(unpack_info.get("remote_attempted")),
+        "unpacked": bool(unpack_info.get("unpacked")),
+        "packer_chain": str(unpack_info.get("packer_chain", "")),
+        "total_layers": int(unpack_info.get("total_layers", 0) or 0),
+        "original_sha256": str(unpack_info.get("original_sha256", "")),
+        "reason": str(unpack_info.get("reason", "")),
+    }
+    if classify_sample_pipeline(analysis_target) == "static_only":
+        out = await _finalize_static_only_job(
+            sample_path=analysis_target,
+            display_filename=safe_name,
+            unpack_info=uinfo,
+        )
+        if unpack_info.get("unpacked") and analysis_target != filepath:
+            try:
+                if filepath.is_file():
+                    filepath.unlink()
+            except OSError:
+                pass
+        return {
+            "status": out.get("status", "completed"),
+            "job_id": out["job_id"],
+            "filename": safe_name,
+            "hashes": out.get("hashes", hashes),
+            "analysis_mode": "static_only",
+            "unpack_info": uinfo,
+            "static_scan": out.get("static_scan", {}),
+            "error": out.get("error"),
+            "message": "拡張子/種別により Ghidra ではなく静的分析のみ行いました。",
+        }
+
     project_name = f"p_{hashes['sha256'][:16]}"
     job_id = str(uuid.uuid4())
     created = datetime.now().isoformat()
@@ -593,14 +697,8 @@ async def upload_binary(
         "sha256": hashes["sha256"],
         "created": created,
         "updated": created,
-        "unpack_info": {
-            "attempted": bool(unpack_info.get("remote_attempted")),
-            "unpacked": bool(unpack_info.get("unpacked")),
-            "packer_chain": str(unpack_info.get("packer_chain", "")),
-            "total_layers": int(unpack_info.get("total_layers", 0) or 0),
-            "original_sha256": str(unpack_info.get("original_sha256", "")),
-            "reason": str(unpack_info.get("reason", "")),
-        },
+        "analysis_mode": "ghidra",
+        "unpack_info": uinfo,
     }
     jobs[job_id] = record
     write_status_atomic(job_id, record)
@@ -636,6 +734,7 @@ async def upload_binary(
         "job_id": job_id,
         "filename": safe_name,
         "hashes": hashes,
+        "analysis_mode": "ghidra",
         "unpack_info": record["unpack_info"],
         "message": (
             "Unpacked %d layer(s) [%s] → Ghidra analysis queued"

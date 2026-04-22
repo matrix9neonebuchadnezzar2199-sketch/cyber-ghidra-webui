@@ -86,7 +86,12 @@ def scan_file(
     except FileNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail=f"Job {job_id} の検体ファイルが見つかりません",
+            detail=(
+                f"Job {job_id} の検体が /app/input 上にありません。 "
+                "Ghidra 解析に成功したジョブではワーカーが検体を削除するため、静的分析は同じアップロードでは実行できません。"
+                " Ghidra が失敗・タイムアウトした直後（検体未削除）なら再実行してください。"
+                " PDF/Office では失敗直後のうちに静的分析を使うか、同じファイルを再アップロードしてください。"
+            ),
         ) from None
 
     scanner_names = body.scanners if body else None

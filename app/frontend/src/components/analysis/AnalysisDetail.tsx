@@ -14,6 +14,9 @@ import { extractSubgraph, filterGraphByName, removeIsolatedNodes } from './graph
 
 type TabId = 'decompile' | 'flow' | 'strings' | 'imports' | 'entry' | 'suspicious' | 'metadata';
 
+/** 深さ制限モードでノードをクリックするたびに積むフォーカス階層（先頭が浅い） */
+type CgFocusTier = { address: string; name: string };
+
 const TABS: { id: TabId; label: string }[] = [
   { id: 'decompile', label: '逆コンパイル' },
   { id: 'flow', label: 'フロー' },
@@ -69,7 +72,7 @@ export function AnalysisDetail({
 
   const flowNav = useFlowNavigation();
   const [cgDepth, setCgDepth] = useState<number>(-1);
-  const [cgFocusAddr, setCgFocusAddr] = useState<string | null>(null);
+  const [cgFocusStack, setCgFocusStack] = useState<CgFocusTier[]>([]);
   const [hideIsolated, setHideIsolated] = useState(false);
   const [cgSearch, setCgSearch] = useState('');
 
@@ -80,12 +83,15 @@ export function AnalysisDetail({
 
   const callGraphRiskMap = useMemo(() => buildCallGraphRiskMap(data), [data]);
 
+  const cgFocusAddress =
+    cgFocusStack.length > 0 ? cgFocusStack[cgFocusStack.length - 1].address : null;
+
   const filteredCallGraph = useMemo(() => {
     if (!data.call_graph) return null;
     let g = data.call_graph;
 
-    if (cgFocusAddr && cgDepth >= 0) {
-      g = extractSubgraph(g, cgFocusAddr, cgDepth);
+    if (cgFocusAddress && cgDepth >= 0) {
+      g = extractSubgraph(g, cgFocusAddress, cgDepth);
     }
 
     if (hideIsolated) {
@@ -93,7 +99,7 @@ export function AnalysisDetail({
     }
 
     return g;
-  }, [data.call_graph, cgFocusAddr, cgDepth, hideIsolated]);
+  }, [data.call_graph, cgFocusAddress, cgDepth, hideIsolated]);
 
   const cgSearchMatchIds = useMemo(() => {
     if (!filteredCallGraph || !cgSearch.trim()) return undefined;
@@ -106,6 +112,10 @@ export function AnalysisDetail({
     setCfgHighlightBlockId(null);
     setDecompileHighlightLine(null);
   }, [fn?.address]);
+
+  useEffect(() => {
+    setCgFocusStack([]);
+  }, [cgDepth, data.file_name]);
 
   const filteredStrings = useMemo(() => {
     const q = filterStrings.trim().toLowerCase();
@@ -305,16 +315,16 @@ export function AnalysisDetail({
                       <option value={5}>5段</option>
                     </select>
                   </label>
-                  {cgDepth >= 0 && !cgFocusAddr && (
+                  {cgDepth >= 0 && cgFocusStack.length === 0 && (
                     <span className="cyber-flow-depth-hint">
-                      ノードをクリックすると、そのノードを中心に表示を絞り込みます
+                      ノードをクリックすると中心に絞り込みます。上の階層バーから前の表示へ戻れます。
                     </span>
                   )}
-                  {cgFocusAddr && (
+                  {cgFocusStack.length > 0 && (
                     <button
                       type="button"
                       className="cyber-flow-reset-focus"
-                      onClick={() => setCgFocusAddr(null)}
+                      onClick={() => setCgFocusStack([])}
                     >
                       フォーカス解除
                     </button>
@@ -322,25 +332,70 @@ export function AnalysisDetail({
                 </div>
 
                 {filteredCallGraph && filteredCallGraph.nodes.length > 0 ? (
-                  <ProgramCallGraphView
-                    graph={filteredCallGraph}
-                    entryPoints={data.entry_points}
-                    riskMap={callGraphRiskMap}
-                    searchMatchIds={cgSearchMatchIds}
-                    onSelectFunctionByAddress={(addr) => {
-                      onSelectFunctionByAddress?.(addr);
-                      if (cgDepth >= 0) setCgFocusAddr(addr);
-                    }}
-                    onOpenFunctionCfg={(addr) => {
-                      onSelectFunctionByAddress?.(addr);
-                      const fnInfo = data.functions.find((f) => f.address === addr);
-                      flowNav.navigateTo({
-                        type: 'cfg',
-                        functionAddress: addr,
-                        functionName: fnInfo?.name ?? addr,
-                      });
-                    }}
-                  />
+                  <>
+                    {cgDepth >= 0 && (
+                      <nav className="cyber-cg-depth-trail" aria-label="コールグラフの表示階層">
+                        <button
+                          type="button"
+                          className={clsx(
+                            'cyber-cg-depth-trail-item',
+                            cgFocusStack.length === 0 && 'cyber-cg-depth-trail-item--current',
+                          )}
+                          onClick={() => setCgFocusStack([])}
+                        >
+                          全体
+                        </button>
+                        {cgFocusStack.map((tier, i) => {
+                          const isLast = i === cgFocusStack.length - 1;
+                          return (
+                            <React.Fragment key={`${tier.address}-${i}`}>
+                              <span className="cyber-cg-depth-trail-sep" aria-hidden>
+                                ›
+                              </span>
+                              <button
+                                type="button"
+                                className={clsx(
+                                  'cyber-cg-depth-trail-item',
+                                  isLast && 'cyber-cg-depth-trail-item--current',
+                                )}
+                                title={tier.address}
+                                onClick={() => setCgFocusStack((s) => s.slice(0, i + 1))}
+                              >
+                                {tier.name}
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                      </nav>
+                    )}
+                    <ProgramCallGraphView
+                      graph={filteredCallGraph}
+                      entryPoints={data.entry_points}
+                      riskMap={callGraphRiskMap}
+                      searchMatchIds={cgSearchMatchIds}
+                      onSelectFunctionByAddress={(addr) => {
+                        onSelectFunctionByAddress?.(addr);
+                        if (cgDepth < 0 || !data.call_graph) return;
+                        const node = data.call_graph.nodes.find(
+                          (n) => n.id === addr || n.address === addr,
+                        );
+                        const label = node?.name ?? addr;
+                        setCgFocusStack((prev) => {
+                          if (prev.length && prev[prev.length - 1].address === addr) return prev;
+                          return [...prev, { address: addr, name: label }];
+                        });
+                      }}
+                      onOpenFunctionCfg={(addr) => {
+                        onSelectFunctionByAddress?.(addr);
+                        const fnInfo = data.functions.find((f) => f.address === addr);
+                        flowNav.navigateTo({
+                          type: 'cfg',
+                          functionAddress: addr,
+                          functionName: fnInfo?.name ?? addr,
+                        });
+                      }}
+                    />
+                  </>
                 ) : (
                   <p className="apple-adetail-hint">
                     コールグラフがありません。バックエンド更新後に検体を再解析してください。

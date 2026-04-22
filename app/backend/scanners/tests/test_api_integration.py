@@ -79,4 +79,4 @@ def test_post_scan_not_found(client: TestClient) -> None:
     r = client.post(f"/api/scan/{jid}", json={})
     assert r.status_code == 404
     d = r.json().get("detail", "")
-    assert d and ("not found" in d.lower() or "見つかりません" in d)
+    assert d and jid in d and "/app/input" in d

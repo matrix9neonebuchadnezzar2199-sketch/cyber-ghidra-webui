@@ -389,6 +389,13 @@ body {
   color: var(--apple-text-secondary);
 }
 
+.apple-job-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--apple-text-secondary);
+}
+
 .apple-job-file {
   margin: 0 0 12px;
   font-size: 14px;
@@ -540,6 +547,68 @@ body {
   margin-top: 14px;
 }
 
+/* Static analysis (separate from Ghidra worker) */
+.apple-static-scan {
+  margin-top: 18px;
+  padding: 14px 14px 12px;
+  border-radius: 10px;
+  background: rgba(10, 132, 255, 0.08);
+  border: 1px solid rgba(10, 132, 255, 0.22);
+}
+
+.apple-static-scan-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #7ac8ff;
+}
+
+.apple-static-scan-ico {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.apple-static-scan-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--apple-text-secondary);
+}
+
+.apple-static-scan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.apple-static-scan-err {
+  margin: 0;
+  font-size: 13px;
+  color: #ff9a93;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.apple-static-scan-pre {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--apple-text);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* App shell + sidebar */
 /* 全幅：サイドバーをビューポート左端に固定（max-width で中央寄せしない） */
 .apple-shell {
@@ -659,6 +728,22 @@ body {
   line-height: 1.45;
   color: var(--apple-text-secondary);
   max-width: 52em;
+}
+
+.apple-analyze-hint {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--apple-text-secondary);
+  max-width: 52em;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--apple-border-subtle);
+}
+
+.apple-analyze-hint strong {
+  color: var(--apple-text);
 }
 
 .apple-analyze-empty {
@@ -1952,6 +2037,66 @@ body {
   font-size: 11px;
   color: var(--apple-text-secondary);
   margin-left: 4px;
+}
+
+/* Call graph: depth-limit drill-down trail (above React Flow) */
+.cyber-cg-depth-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 6px;
+  padding: 10px 14px 12px;
+  margin: 0 0 10px;
+  border-radius: 10px;
+  background: rgba(6, 4, 22, 0.92);
+  border: 1px solid rgba(0, 243, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.cyber-cg-depth-trail-sep {
+  color: rgba(255, 255, 255, 0.28);
+  user-select: none;
+  padding: 0 2px;
+  font-size: 12px;
+}
+
+.cyber-cg-depth-trail-item {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(200, 230, 255, 0.82);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.cyber-cg-depth-trail-item:hover {
+  background: rgba(0, 243, 255, 0.1);
+  border-color: rgba(0, 243, 255, 0.28);
+  color: #e6fbff;
+}
+
+.cyber-cg-depth-trail-item--current {
+  color: #7aefff;
+  font-weight: 600;
+  border-color: rgba(0, 243, 255, 0.38);
+  background: rgba(0, 243, 255, 0.08);
+  cursor: default;
+}
+
+.cyber-cg-depth-trail-item--current:hover {
+  background: rgba(0, 243, 255, 0.1);
 }
 
 .apple-decomp-row--clickable {

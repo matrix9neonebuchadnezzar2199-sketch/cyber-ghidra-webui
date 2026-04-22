@@ -34,6 +34,9 @@ docker compose build backend ghidra-worker
 docker compose up -d
 ```
 
+**Python（`main.py`・`sample_pipeline.py` 等）の改修**は `requirements.txt` 変更と同様、**イメージ再ビルド**しないと反映されません（`git pull` 直後の「PDF がまだ Ghidra に行く」等は、未コミット/未再ビルド/レイヤーキャッシュの疑い。確実に反映したい場合は
+`docker compose build --no-cache backend ghidra-worker` を実行してください）。フロントは `./app/frontend` ビルドなので、UI 変更は `docker compose build frontend` か Compose のフロントサービスに従います。
+
 バックエンドイメージの Java は **Ghidra 11.3.1+ 向けに JDK 21**（Eclipse Temurin をマルチステージで `/opt/java/openjdk` に配置。`javac` 含む）です。
 
 ## 使い方
@@ -58,7 +61,7 @@ docker compose up -d
 
 アップロードされたバイナリ（アーカイブから展開されたものを含む）は Docker の名前付きボリューム `cyber_input` に保存されます。ホスト側のファイルエクスプローラーには表示されないため、ウイルス対策ソフトによる誤検知や誤実行のリスクがありません。
 
-- 解析完了後、ghidra-worker がボリューム内のバイナリを自動削除します
+- **Ghidra 解析に成功した**ジョブについて、ghidra-worker が `/app/input` 上の検体を削除します（失敗・タイムアウト時は静的分析用に検体を残します）
 - ボリュームを手動でクリアする場合: `docker volume rm cyber-ghidra-webui-main_cyber_input`
 - ボリュームの中身を確認する場合: `docker run --rm -v cyber-ghidra-webui-main_cyber_input:/data alpine ls -la /data`
 

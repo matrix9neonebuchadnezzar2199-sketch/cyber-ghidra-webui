@@ -109,6 +109,8 @@ def process_job(job_path: Path) -> None:
     ]
     PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
+    # 成功完了時だけ input を掃除する（失敗時は静的分析 API 用に検体を残す）
+    delete_input = False
     try:
         child_env = os.environ.copy()
         child_env["CYBERGHIDRA_JOB_ID"] = job_id
@@ -235,6 +237,8 @@ def process_job(job_path: Path) -> None:
                         out["analysis_json"] = c.name
                         break
         write_status(job_id, out)
+        if rc == 0:
+            delete_input = True
     except Exception as exc:
         write_status(
             job_id,
@@ -246,15 +250,19 @@ def process_job(job_path: Path) -> None:
             },
         )
     finally:
-        # 解析完了後に input ファイルを削除（マルウェア検体の露出時間を最小化）
-        try:
-            raw = payload.get("filepath") or payload.get("input_path", "")
-            input_path = Path(str(raw)) if raw else Path("")
-            if input_path.is_file():
-                input_path.unlink()
-                print("[ghidra-worker] cleaned up input: %s" % input_path, flush=True)
-        except OSError as exc:
-            print("[ghidra-worker] WARNING: failed to clean input: %s" % exc, flush=True)
+        if delete_input:
+            # 解析成功完了後のみ：input を削除（露出時間の最小化）
+            try:
+                raw = payload.get("filepath") or payload.get("input_path", "")
+                input_path = Path(str(raw)) if raw else Path("")
+                if input_path.is_file():
+                    input_path.unlink()
+                    print(
+                        "[ghidra-worker] cleaned up input (job succeeded): %s" % input_path,
+                        flush=True,
+                    )
+            except OSError as exc:
+                print("[ghidra-worker] WARNING: failed to clean input: %s" % exc, flush=True)
         _finish(proc_path)
 
 
