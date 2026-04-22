@@ -905,6 +905,177 @@ section.apple-analyze-toolstrip {
   max-height: none;
 }
 
+/* 一括分析キュー */
+.apple-batch-queue {
+  margin: 0 0 12px;
+  padding: 12px 12px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--apple-border-subtle);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.apple-batch-queue-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--apple-text);
+}
+
+.apple-batch-queue-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--apple-text-secondary);
+}
+
+.apple-batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+button.apple-batch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--apple-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+button.apple-batch-row:hover {
+  background: rgba(10, 132, 255, 0.12);
+}
+
+button.apple-batch-row.is-selected {
+  border-color: rgba(10, 132, 255, 0.5);
+  background: rgba(10, 132, 255, 0.16);
+}
+
+.apple-batch-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  word-break: break-all;
+  font-weight: 500;
+}
+
+.apple-batch-gh,
+.apple-batch-status {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+  flex-shrink: 0;
+}
+
+.apple-batch-status--err {
+  color: #ff9a93;
+  font-size: 11px;
+  max-width: 14rem;
+  text-align: right;
+  word-break: break-all;
+}
+
+.apple-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.apple-pill--static {
+  background: rgba(10, 132, 255, 0.2);
+  color: #7ac8ff;
+}
+
+.apple-pill--ghidra {
+  background: rgba(50, 215, 75, 0.15);
+  color: #6ee7b7;
+}
+
+.apple-tr-click {
+  cursor: pointer;
+}
+
+.apple-tr-click:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.apple-tr-click:focus-visible {
+  outline: 2px solid rgba(10, 132, 255, 0.55);
+  outline-offset: -1px;
+}
+
+.apple-risk {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+}
+
+.apple-risk--safe {
+  color: #6ee7b7;
+  background: rgba(50, 215, 75, 0.12);
+}
+
+.apple-risk--low {
+  color: #7dd3fc;
+  background: rgba(10, 132, 255, 0.15);
+}
+
+.apple-risk--warn {
+  color: #ffcc5c;
+  background: rgba(255, 159, 10, 0.18);
+}
+
+.apple-risk--danger {
+  color: #ffb4ab;
+  background: rgba(255, 69, 58, 0.2);
+}
+
+.apple-static-highlights {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 69, 58, 0.1);
+  border: 1px solid rgba(255, 90, 80, 0.22);
+}
+
+.apple-static-highlights-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffb4ab;
+}
+
+.apple-static-highlights-ul {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--apple-text-secondary);
+}
+
+.apple-static-highlights-li {
+  margin: 0 0 4px;
+}
+
 /* ジョブ枠 → 静的分析を縦に伸ばし、JSON pre が余白を埋める */
 .apple-analyze .apple-analyze-toolstrip > .apple-job-panel {
   flex: 1 1 0;

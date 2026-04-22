@@ -8,6 +8,7 @@ import { useApiBase } from './context/ApiContext';
 function AppShell() {
   const { apiBase } = useApiBase();
   const [section, setSection] = useState<SidebarSection>('analyze');
+  const [reopenJobId, setReopenJobId] = useState<string | null>(null);
 
   return (
     <div className="apple-page">
@@ -22,13 +23,28 @@ function AppShell() {
         <Sidebar active={section} onSelect={setSection} />
         <main className="apple-shell-main">
           {/* Keep mounted so job polling / 解析ワークスペース survives tab switches */}
-          <div className={section === 'analyze' ? 'apple-view' : 'apple-view apple-view--hidden'}>
-            <AnalysisView />
+          <div
+            className={section === 'analyze' ? 'apple-view' : 'apple-view apple-view--hidden'}
+          >
+            <AnalysisView
+              reopenJobId={reopenJobId}
+              onReopenConsumed={() => setReopenJobId(null)}
+            />
           </div>
-          <div className={section === 'history' ? 'apple-view' : 'apple-view apple-view--hidden'}>
-            <HistoryView onResultOpened={() => setSection('analyze')} />
+          <div
+            className={section === 'history' ? 'apple-view' : 'apple-view apple-view--hidden'}
+          >
+            <HistoryView
+              onResultOpened={() => setSection('analyze')}
+              onOpenJobId={(id) => {
+                setReopenJobId(id);
+                setSection('analyze');
+              }}
+            />
           </div>
-          <div className={section === 'settings' ? 'apple-view' : 'apple-view apple-view--hidden'}>
+          <div
+            className={section === 'settings' ? 'apple-view' : 'apple-view apple-view--hidden'}
+          >
             <SettingsView />
           </div>
         </main>

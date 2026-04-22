@@ -5,6 +5,12 @@ import { useAnalysisResult } from '../context/AnalysisResultContext';
 import { AnalysisDetail } from './analysis/AnalysisDetail';
 import { FunctionTree } from './analysis/FunctionTree';
 import { filterFunctionIndices } from './analysis/functionTreeUtils';
+import {
+  extractOverallRiskFromRecord,
+  isRiskConcerning,
+  presentOverallRisk,
+  staticScanHighlightLines,
+} from '../utils/safetyMeta';
 
 const STATIC_SCAN_FONT_LS_KEY = 'cyberghidra_staticScanOutFontPx';
 
@@ -62,6 +68,21 @@ function statusLabelJa(status: string): string {
   }
 }
 
+type AnalysisViewProps = {
+  /** 履歴から行クリック → 同じタブ内で当該 job を再表示 */
+  reopenJobId?: string | null;
+  onReopenConsumed?: () => void;
+};
+
+type BatchEntry = {
+  key: string;
+  jobId: string;
+  filename: string;
+  analysisMode: 'ghidra' | 'static_only';
+  snapshot: JobStatus | null;
+  error?: string;
+};
+
 function jobStatusLine(status: string, mode?: 'ghidra' | 'static_only') {
   if (mode === 'static_only' && status === 'completed') {
     return '静的分析が完了しました（Ghidra は起動しません）';
@@ -72,7 +93,7 @@ function jobStatusLine(status: string, mode?: 'ghidra' | 'static_only') {
   return statusLabelJa(status);
 }
 
-export function AnalysisView() {
+export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => undefined }: AnalysisViewProps) {
   const { apiBase } = useApiBase();
   const {
     analysisData,
@@ -106,6 +127,14 @@ export function AnalysisView() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanSummary, setScanSummary] = useState<string | null>(null);
   const [staticScanFontPx, setStaticScanFontPx] = useState(readInitialStaticScanFontPx);
+  const [batchEntries, setBatchEntries] = useState<BatchEntry[] | null>(null);
+  const [selectedBatchKey, setSelectedBatchKey] = useState<string | null>(null);
+  const batchEntriesRef = useRef<BatchEntry[] | null>(null);
+  const selectedBatchKeyRef = useRef<string | null>(null);
+  const lastGhidraLoadedForJobRef = useRef<string | null>(null);
+
+  batchEntriesRef.current = batchEntries;
+  selectedBatchKeyRef.current = selectedBatchKey;
 
   const loadHealth = useCallback(async () => {
     try {
@@ -121,6 +150,14 @@ export function AnalysisView() {
   }, [loadHealth]);
 
   useEffect(() => {
+    if (batchEntries && batchEntries.length > 0) {
+      if (pollRef.current !== null) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+
     if (!activeJob) {
       setJobSnapshot(null);
       return;
@@ -159,7 +196,7 @@ export function AnalysisView() {
         pollRef.current = null;
       }
     };
-  }, [activeJob, apiBase, loadResultFile]);
+  }, [activeJob, apiBase, loadResultFile, batchEntries]);
 
   useEffect(() => {
     if (!activeJob || !jobSnapshot) return;
@@ -211,6 +248,113 @@ export function AnalysisView() {
     });
   }, []);
 
+  const applyEntryToDetail = useCallback(
+    (e: BatchEntry) => {
+      if (!e.jobId || e.error) return;
+      setActiveJob({ id: e.jobId, filename: e.filename, startedAt: Date.now() });
+      const s = e.snapshot;
+      if (!s) {
+        setJobSnapshot(null);
+        setScanSummary(null);
+        return;
+      }
+      setJobSnapshot(s);
+      if (e.analysisMode === 'static_only' && s.static_scan) {
+        setScanSummary(JSON.stringify(s.static_scan, null, 2));
+        return;
+      }
+      setScanSummary(null);
+      if (e.analysisMode === 'ghidra' && s.status === 'completed' && s.analysis_json) {
+        if (lastGhidraLoadedForJobRef.current !== e.jobId) {
+          lastGhidraLoadedForJobRef.current = e.jobId;
+          void loadResultFile(s.analysis_json).then((ok) => {
+            if (!ok) setMessage('解析JSONを開けませんでした');
+          });
+        }
+      }
+    },
+    [loadResultFile],
+  );
+
+  useEffect(() => {
+    if (!reopenJobId) return;
+    let cancel = false;
+    (async () => {
+      setBatchEntries(null);
+      setSelectedBatchKey(null);
+      setStatusMessage(null);
+      setMessage(null);
+      setScanError(null);
+      setScanSummary(null);
+      setJobSnapshot(null);
+      lastGhidraLoadedForJobRef.current = null;
+      const r = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(reopenJobId)}`);
+      if (cancel) return;
+      if (!r.ok) {
+        if (!cancel) {
+          setMessage('履歴のジョブを読み取れませんでした');
+          onReopenConsumed();
+        }
+        return;
+      }
+      const data = (await r.json()) as JobStatus;
+      setActiveJob({
+        id: reopenJobId,
+        filename: data.filename || '',
+        startedAt: Date.now(),
+      });
+      setJobSnapshot(data);
+      if (data.analysis_mode === 'static_only' && data.static_scan) {
+        setScanSummary(JSON.stringify(data.static_scan, null, 2));
+      } else {
+        setScanSummary(null);
+      }
+      if (data.analysis_mode === 'ghidra' && data.status === 'completed' && data.analysis_json) {
+        const ok = await loadResultFile(data.analysis_json);
+        if (!ok) setMessage('解析JSONを開けませんでした');
+        lastGhidraLoadedForJobRef.current = reopenJobId;
+      }
+      if (!cancel) onReopenConsumed();
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [reopenJobId, apiBase, loadResultFile, onReopenConsumed]);
+
+  useEffect(() => {
+    if (!batchEntries?.length) return;
+    const tick = async () => {
+      const list = batchEntriesRef.current;
+      if (!list?.length) return;
+      const out: BatchEntry[] = [];
+      for (const e of list) {
+        if (!e.jobId || e.error) {
+          out.push(e);
+          continue;
+        }
+        const r = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(e.jobId)}`);
+        if (!r.ok) {
+          out.push(e);
+          continue;
+        }
+        const data = (await r.json()) as JobStatus;
+        out.push({ ...e, snapshot: data });
+      }
+      setBatchEntries(out);
+      const selK = selectedBatchKeyRef.current;
+      const pick =
+        out.find((x) => x.key === selK) ||
+        out.find((x) => x.jobId && !x.error) ||
+        out[0];
+      if (pick && pick.jobId && !pick.error) {
+        applyEntryToDetail(pick);
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 2000);
+    return () => window.clearInterval(t);
+  }, [apiBase, applyEntryToDetail, batchEntries?.length]);
+
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
@@ -218,6 +362,90 @@ export function AnalysisView() {
     setStatusMessage(null);
     setScanError(null);
     setScanSummary(null);
+    setBatchEntries(null);
+    setSelectedBatchKey(null);
+    lastGhidraLoadedForJobRef.current = null;
+    if (files.length > 1) {
+      setActiveJob(null);
+      setJobSnapshot(null);
+    }
+    if (files.length > 1) {
+      try {
+        const arr = Array.from(files);
+        const entries: BatchEntry[] = [];
+        for (let i = 0; i < arr.length; i += 1) {
+          const file = arr[i];
+          const key = `m-${i}-${file.name}`;
+          const fd = new FormData();
+          fd.append('file', file);
+          fd.append('archive_password', archivePassword);
+          // eslint-disable-next-line no-await-in-loop
+          const r = await fetch(`${apiBase}/api/upload`, { method: 'POST', body: fd });
+          // eslint-disable-next-line no-await-in-loop
+          const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+          if (!r.ok) {
+            entries.push({
+              key,
+              jobId: '',
+              filename: file.name,
+              analysisMode: 'ghidra',
+              snapshot: null,
+              error:
+                typeof data.detail === 'string' ? data.detail : `HTTP ${r.status} ${r.statusText}`,
+            });
+            continue;
+          }
+          if (data.archive === true || data.archive === 'true' || data.archive === 1) {
+            entries.push({
+              key,
+              jobId: '',
+              filename: file.name,
+              analysisMode: 'ghidra',
+              snapshot: null,
+              error: 'アーカイブは1ファイルずつ選んでください（一括に混ぜない）',
+            });
+            continue;
+          }
+          const jid = typeof data.job_id === 'string' ? data.job_id : '';
+          if (!jid) {
+            entries.push({
+              key,
+              jobId: '',
+              filename: file.name,
+              analysisMode: 'ghidra',
+              snapshot: null,
+              error: 'job_id がありません',
+            });
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          const jr = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(jid)}`);
+          let snap: JobStatus | null = null;
+          if (jr.ok) {
+            snap = (await jr.json()) as JobStatus;
+          }
+          const am = data.analysis_mode === 'static_only' ? 'static_only' : 'ghidra';
+          entries.push({ key, jobId: jid, filename: file.name, analysisMode: am, snapshot: snap });
+        }
+        setBatchEntries(entries);
+        const firstOk = entries.find((e) => e.jobId && !e.error) ?? null;
+        if (firstOk) {
+          setSelectedBatchKey(firstOk.key);
+          applyEntryToDetail(firstOk);
+        } else {
+          setMessage('一括のうち成功したジョブがありません');
+        }
+        setStatusMessage(
+          `複数件: ${entries.filter((e) => e.jobId && !e.error).length}/${entries.length} 件受理`,
+        );
+      } catch (e) {
+        setMessage(e instanceof Error ? e.message : '一括アップロードに失敗しました');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     const fd = new FormData();
     fd.append('file', files[0]);
     fd.append('archive_password', archivePassword);
@@ -339,9 +567,10 @@ export function AnalysisView() {
       <section className="apple-analyze-hero">
         <h2 className="apple-analyze-title">解析</h2>
         <p className="apple-analyze-lead">
-          下の「検体を選ぶ」は<strong>1 か所の受け口</strong>です。<strong>PE/ELF 等</strong>は主に
-          <strong> Ghidra</strong> へ、<strong>PDF / Office</strong> 等は拡張子と種別で
-          <strong> 静的分析</strong>へ、バックエンドが振り分けます（同じ欄に ZIP/7z も可能。上限はサーバ方針に従います）。
+          「検体を選ぶ」で <strong>複数ファイル</strong>を選べます（一括行は下の一覧・各行で切替）。1
+          件のとき従来どおり。<strong>PE/ELF 等</strong>は
+          <strong> Ghidra</strong> へ、<strong>PDF / Office</strong> 等は
+          <strong> 静的分析</strong>へ、バックエンドが振り分け（ZIP/7z は1件向け。一括行に混ぜない）ます。
         </p>
         <p className="apple-analyze-hint">
           ジョブ欄の見出しが <strong>「Ghidra 解析」</strong> か <strong>「静的分析」</strong> かで処理が分かれます。PDF/Office
@@ -361,9 +590,10 @@ export function AnalysisView() {
             <input
               type="file"
               className="apple-file-input"
+              multiple
               disabled={busy}
               onChange={(e) => void onUpload(e.target.files)}
-              title="PE/ELF・PDF/Office・ZIP/7z 等（1 件ずつ）"
+              title="Ctrl/Shift で複数可（ZIP は単体向け。混在時は1件ずつ推奨）"
             />
           </label>
           <button
@@ -412,6 +642,86 @@ export function AnalysisView() {
           </div>
         )}
         {message && <p className="apple-msg">{message}</p>}
+
+        {batchEntries && batchEntries.length > 0 && (
+          <div className="apple-batch-queue" role="region" aria-label="一括分析キュー">
+            <h4 className="apple-batch-queue-title">選択したファイル（{batchEntries.length} 件）</h4>
+            <p className="apple-batch-queue-hint">
+              行を切り替えると下の詳細・静的分析内容が入れ替わります。Ghidra
+              ジョブは待ち/実行中/％が出ます。静析は即時～数秒で完了扱いです。
+            </p>
+            <ul className="apple-batch-list">
+              {batchEntries.map((e) => {
+                const s = e.snapshot;
+                const risk = e.analysisMode === 'static_only' && s?.static_scan
+                  ? extractOverallRiskFromRecord(s.static_scan)
+                  : null;
+                const pr = presentOverallRisk(risk);
+                const pct =
+                  s?.analysis_mode !== 'static_only' &&
+                  typeof s?.progress_percent === 'number' &&
+                  s.progress_percent >= 0
+                    ? Math.round(s.progress_percent)
+                    : null;
+                return (
+                  <li key={e.key}>
+                    <button
+                      type="button"
+                      className={
+                        e.key === selectedBatchKey
+                          ? 'apple-batch-row is-selected'
+                          : 'apple-batch-row'
+                      }
+                      onClick={() => {
+                        setSelectedBatchKey(e.key);
+                        const cur = batchEntriesRef.current?.find((x) => x.key === e.key);
+                        if (cur) applyEntryToDetail(cur);
+                      }}
+                    >
+                      <span className="apple-batch-name">{e.filename}</span>
+                      {e.error ? (
+                        <span className="apple-batch-status apple-batch-status--err">{e.error}</span>
+                      ) : e.analysisMode === 'static_only' ? (
+                        <span
+                          className={
+                            s
+                              ? `apple-risk apple-risk--${pr.tone}`
+                              : 'apple-batch-status'
+                          }
+                        >
+                          {s ? pr.label : '…'}
+                        </span>
+                      ) : (
+                        <span className="apple-batch-gh">
+                          {s?.status === 'running' && pct != null
+                            ? `Ghidra ${pct}%`
+                            : s?.status || '—'}
+                        </span>
+                      )}
+                    </button>
+                    {!e.error && s?.analysis_mode === 'ghidra' && s.status === 'running' && (
+                      <div
+                        className="apple-progress-track apple-progress-track--determinate"
+                        style={{ marginTop: 4 }}
+                        role="progressbar"
+                        aria-valuenow={pct ?? 0}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
+                        <div
+                          className="apple-progress-fill apple-progress-fill--determinate"
+                          style={{
+                            width: `${Math.min(100, Math.max(0, typeof pct === 'number' ? pct : 0))}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
 
         {activeJob?.id && (
           <div className="apple-job-panel" role="status" aria-live="polite">
@@ -588,6 +898,28 @@ export function AnalysisView() {
                 </button>
                 {scanError && <p className="apple-static-scan-err">{scanError}</p>}
               </div>
+              {jobIsStaticOnly && jobSnapshot?.static_scan && (() => {
+                const o = jobSnapshot.static_scan;
+                const risk = extractOverallRiskFromRecord(o);
+                const lines = staticScanHighlightLines(o, 10);
+                if (!lines.length && !isRiskConcerning(risk)) return null;
+                return (
+                  <div className="apple-static-highlights" role="status">
+                    {isRiskConcerning(risk) && (
+                      <p className="apple-static-highlights-title">要確認: 中〜高リスクの所見（抜粋）</p>
+                    )}
+                    {lines.length > 0 && (
+                      <ul className="apple-static-highlights-ul">
+                        {lines.map((l, i) => (
+                          <li key={i} className="apple-static-highlights-li">
+                            {l}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
               {scanSummary && (
                 <>
                   <div className="apple-static-scan-prebar">
@@ -638,6 +970,9 @@ export function AnalysisView() {
                 setStatusMessage(null);
                 setScanError(null);
                 setScanSummary(null);
+                setBatchEntries(null);
+                setSelectedBatchKey(null);
+                lastGhidraLoadedForJobRef.current = null;
               }}
             >
               閉じる
