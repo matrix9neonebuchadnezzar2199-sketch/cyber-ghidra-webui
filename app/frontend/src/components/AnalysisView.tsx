@@ -1,10 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FileUp, Loader2, RefreshCw, ScanLine, XCircle } from 'lucide-react';
+import { CheckCircle2, FileUp, Loader2, Minus, Plus, RefreshCw, ScanLine, XCircle } from 'lucide-react';
 import { useApiBase } from '../context/ApiContext';
 import { useAnalysisResult } from '../context/AnalysisResultContext';
 import { AnalysisDetail } from './analysis/AnalysisDetail';
 import { FunctionTree } from './analysis/FunctionTree';
 import { filterFunctionIndices } from './analysis/functionTreeUtils';
+
+const STATIC_SCAN_FONT_LS_KEY = 'cyberghidra_staticScanOutFontPx';
+
+function readInitialStaticScanFontPx(): number {
+  if (typeof window === 'undefined') return 14;
+  try {
+    const s = localStorage.getItem(STATIC_SCAN_FONT_LS_KEY);
+    const n = s == null ? NaN : parseInt(s, 10);
+    if (Number.isFinite(n) && n >= 10 && n <= 24) return n;
+  } catch {
+    /* ignore */
+  }
+  return 14;
+}
 
 type JobStatus = {
   job_id?: string;
@@ -91,6 +105,7 @@ export function AnalysisView() {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanSummary, setScanSummary] = useState<string | null>(null);
+  const [staticScanFontPx, setStaticScanFontPx] = useState(readInitialStaticScanFontPx);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -183,6 +198,18 @@ export function AnalysisView() {
       setScanBusy(false);
     }
   }, [apiBase, activeJob?.id]);
+
+  const adjustStaticScanFont = useCallback((delta: number) => {
+    setStaticScanFontPx((prev) => {
+      const next = Math.min(24, Math.max(10, prev + delta));
+      try {
+        localStorage.setItem(STATIC_SCAN_FONT_LS_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -558,9 +585,43 @@ export function AnalysisView() {
                 {scanError && <p className="apple-static-scan-err">{scanError}</p>}
               </div>
               {scanSummary && (
-                <pre className="apple-static-scan-pre" tabIndex={0}>
-                  {scanSummary}
-                </pre>
+                <>
+                  <div className="apple-static-scan-prebar">
+                    <span className="apple-static-scan-prebar-label">JSON 出力の文字</span>
+                    <div className="apple-static-scan-prebar-ctrl" role="group" aria-label="静的分析 JSON の文字サイズ">
+                      <button
+                        type="button"
+                        className="apple-static-scan-font-btn"
+                        onClick={() => adjustStaticScanFont(-1)}
+                        disabled={staticScanFontPx <= 10}
+                        aria-label="1 段階小さく"
+                        title="小さく"
+                      >
+                        <Minus size={16} strokeWidth={2.5} aria-hidden />
+                      </button>
+                      <span className="apple-static-scan-prebar-value" aria-live="polite">
+                        {staticScanFontPx}px
+                      </span>
+                      <button
+                        type="button"
+                        className="apple-static-scan-font-btn"
+                        onClick={() => adjustStaticScanFont(1)}
+                        disabled={staticScanFontPx >= 24}
+                        aria-label="1 段階大きく"
+                        title="大きく"
+                      >
+                        <Plus size={16} strokeWidth={2.5} aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+                  <pre
+                    className="apple-static-scan-pre"
+                    style={{ fontSize: staticScanFontPx }}
+                    tabIndex={0}
+                  >
+                    {scanSummary}
+                  </pre>
+                </>
               )}
             </div>
 

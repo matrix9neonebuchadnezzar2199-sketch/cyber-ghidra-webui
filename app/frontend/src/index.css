@@ -593,17 +593,82 @@ body {
   min-width: 0;
 }
 
-.apple-static-scan-pre {
+/* このブロック内だけのフォントサイズ（.apple-static-scan-pre に inline style で上書き可） */
+.apple-static-scan-prebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
   margin: 12px 0 0;
+  padding: 0 0 2px;
+}
+
+.apple-static-scan-prebar-label {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+  font-weight: 500;
+}
+
+.apple-static-scan-prebar-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 2px;
+}
+
+.apple-static-scan-prebar-value {
+  min-width: 2.8rem;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--apple-text);
+  padding: 0 2px;
+}
+
+button.apple-static-scan-font-btn {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #b8d9ff;
+}
+
+button.apple-static-scan-font-btn:hover:not(:disabled) {
+  background: rgba(10, 132, 255, 0.25);
+  color: #e8f4ff;
+}
+
+button.apple-static-scan-font-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+button.apple-static-scan-font-btn:focus-visible {
+  outline: 2px solid rgba(10, 132, 255, 0.6);
+  outline-offset: 1px;
+}
+
+.apple-static-scan-pre {
+  margin: 8px 0 0;
   padding: 10px 12px;
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.35;
+  font-size: 14px;
+  line-height: 1.45;
   color: var(--apple-text);
   background: rgba(0, 0, 0, 0.35);
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  max-height: 220px;
+  max-height: min(52vh, 420px);
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
