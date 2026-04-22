@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     ca-certificates \
     p7zip-full \
+    binwalk \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG GHIDRA_VERSION=11.3.1

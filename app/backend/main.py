@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from annotator import annotate_function, select_target_functions
 from packer_detect import is_pe_file, quick_packer_heuristic
+from scanners.router import router as scan_router
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
@@ -431,6 +432,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Cyber Ghidra API", lifespan=lifespan)
+
+app.include_router(scan_router)
 
 app.add_middleware(
     CORSMiddleware,
