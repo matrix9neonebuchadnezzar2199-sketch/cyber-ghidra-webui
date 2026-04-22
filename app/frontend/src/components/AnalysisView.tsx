@@ -331,7 +331,11 @@ export function AnalysisView() {
   );
 
   return (
-    <div className="apple-analyze">
+    <div
+      className={
+        analysisData ? 'apple-analyze apple-analyze--with-ws' : 'apple-analyze'
+      }
+    >
       <section className="apple-analyze-hero">
         <h2 className="apple-analyze-title">解析</h2>
         <p className="apple-analyze-lead">
@@ -345,7 +349,7 @@ export function AnalysisView() {
         </p>
       </section>
 
-      <section className="apple-toolbar apple-toolbar--compact">
+      <section className="apple-toolbar apple-toolbar--compact apple-analyze-toolstrip">
         <div className="apple-toolbar-row">
           <label className="apple-file-label apple-btn apple-btn-primary">
             {busy ? (

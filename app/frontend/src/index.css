@@ -35,11 +35,14 @@
 html {
   -webkit-font-smoothing: antialiased;
   color-scheme: dark;
+  height: 100%;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100%;
+  min-height: 100dvh;
+  height: 100%;
   background: var(--apple-bg);
   color: var(--apple-text);
   font-family: var(--font-text);
@@ -49,10 +52,22 @@ body {
   letter-spacing: -0.357px;
   overflow-x: hidden;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#root {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
 }
 
 .apple-page {
-  min-height: 100vh;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -151,6 +166,9 @@ body {
   border-radius: 18px;
   padding: 24px;
   margin-bottom: 24px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .apple-toolbar-row {
@@ -675,9 +693,9 @@ button.apple-static-scan-font-btn:focus-visible {
 }
 
 /* App shell + sidebar */
-/* 全幅：サイドバーをビューポート左端に固定（max-width で中央寄せしない） */
+/* 全幅：メイン列は可変、縦方向は残り高さを使い子でフィット */
 .apple-shell {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   min-height: 0;
   width: 100%;
@@ -741,13 +759,43 @@ button.apple-static-scan-font-btn:focus-visible {
 }
 
 .apple-shell-main {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
-  padding: 28px 22px 56px;
+  min-height: 0;
+  padding: 20px 20px 28px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ルート毎（解析 / 履歴 / 設定）の 1 カラムがビュー幅いっぱい・高さ残り分を取る */
+.apple-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .apple-view--hidden {
   display: none !important;
+}
+
+/* 履歴 / 設定もメイン列いっぱいに */
+.apple-history,
+.apple-settings {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 @media (max-width: 833px) {
@@ -775,8 +823,110 @@ button.apple-static-scan-font-btn:focus-visible {
 }
 
 /* Analyze / History / Settings section headers */
+/* 解析タブ: 帯枠の横幅いっぱい。縦は空き高さに合わせて JSON/ジョブ枠を伸ばす */
+.apple-analyze {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .apple-analyze-hero {
   margin-bottom: 20px;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* 帯: 上に操作、ジョブ枠が伸び、キャプションを下端寄せ */
+section.apple-analyze-toolstrip {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* 上に 2 ペイン（Ghidra ウイが付く）のとき: 帯域は中身分だけ */
+.apple-analyze--with-ws > .apple-analyze-toolstrip {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* 上だけ: 帯＋ジョブが残り高さの主役 */
+.apple-analyze:not(.apple-analyze--with-ws) > .apple-analyze-toolstrip {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.apple-analyze .apple-analyze-toolstrip > .apple-caption {
+  flex: 0 0 auto;
+  margin-top: 16px;
+}
+
+/* ジョブ枠があるときだけフッターを帯域の下に密着 */
+.apple-analyze .apple-analyze-toolstrip:has(> .apple-job-panel) > .apple-caption {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+/* 下の 2 ペイン（履歴等から開いたとき） */
+.apple-analyze--with-ws > .apple-workspace {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.apple-analyze--with-ws .apple-ws-grid {
+  flex: 1 1 0;
+  min-height: 220px;
+}
+
+@media (max-width: 1100px) {
+  .apple-analyze--with-ws .apple-ws-grid {
+    min-height: 0;
+  }
+}
+
+.apple-analyze--with-ws .apple-ws-col {
+  min-height: 0;
+}
+
+.apple-analyze--with-ws .apple-fn-tree-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
+
+/* ジョブ枠 → 静的分析を縦に伸ばし、JSON pre が余白を埋める */
+.apple-analyze .apple-analyze-toolstrip > .apple-job-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+}
+
+.apple-analyze .apple-static-scan {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.apple-analyze .apple-static-scan-pre {
+  flex: 1 1 0;
+  min-height: 5rem;
+  max-height: none;
+  overflow: auto;
 }
 
 .apple-analyze-title {
@@ -792,7 +942,7 @@ button.apple-static-scan-font-btn:focus-visible {
   font-size: 15px;
   line-height: 1.45;
   color: var(--apple-text-secondary);
-  max-width: 52em;
+  max-width: 100%;
 }
 
 .apple-analyze-hint {
@@ -800,7 +950,9 @@ button.apple-static-scan-font-btn:focus-visible {
   font-size: 14px;
   line-height: 1.5;
   color: var(--apple-text-secondary);
-  max-width: 52em;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px 14px;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.2);
@@ -812,9 +964,13 @@ button.apple-static-scan-font-btn:focus-visible {
 }
 
 .apple-analyze-empty {
-  margin-top: 24px;
+  margin-top: 20px;
   font-size: 14px;
   color: var(--apple-text-secondary);
+  flex: 0 0 auto;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .apple-toolbar--compact {
