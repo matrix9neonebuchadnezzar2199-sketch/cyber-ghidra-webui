@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Sidebar, type SidebarSection } from './components/Sidebar';
 import { AnalysisView } from './components/AnalysisView';
 import { HistoryView } from './components/HistoryView';
@@ -9,6 +9,20 @@ function AppShell() {
   const { apiBase } = useApiBase();
   const [section, setSection] = useState<SidebarSection>('analyze');
   const [reopenJobId, setReopenJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const fromUrl = sp.get('jobId');
+    if (fromUrl) {
+      setReopenJobId(fromUrl);
+      setSection('analyze');
+      sp.delete('jobId');
+      const q = sp.toString();
+      const next = `${window.location.pathname}${q ? `?${q}` : ''}${window.location.hash || ''}`;
+      window.history.replaceState({}, '', next);
+    }
+  }, []);
 
   return (
     <div className="apple-page">

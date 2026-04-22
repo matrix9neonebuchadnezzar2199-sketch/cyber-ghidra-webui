@@ -910,11 +910,12 @@ section.apple-analyze-toolstrip {
   margin: 0 0 12px;
   padding: 12px 12px 10px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(18, 20, 26, 0.95);
   border: 1px solid var(--apple-border-subtle);
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  isolation: isolate;
 }
 
 .apple-batch-queue-title {
@@ -934,10 +935,55 @@ section.apple-analyze-toolstrip {
 .apple-batch-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 2px 4px 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: min(42vh, 20rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.apple-batch-item {
+  flex-shrink: 0;
+}
+
+.apple-batch-item-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.apple-batch-item-row .apple-batch-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+button.apple-batch-external {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 12, 16, 0.8);
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: center;
+}
+
+button.apple-batch-external:hover {
+  color: var(--apple-text);
+  background: rgba(10, 132, 255, 0.14);
+  border-color: rgba(10, 132, 255, 0.3);
 }
 
 button.apple-batch-row {
@@ -1051,10 +1097,80 @@ button.apple-batch-row.is-selected {
 
 .apple-static-highlights {
   margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--apple-border-subtle, rgba(255, 255, 255, 0.1));
+  overflow: hidden;
+}
+
+.apple-static-executive {
+  padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(34, 120, 65, 0.18) 0%, rgba(0, 0, 0, 0) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.apple-static-executive-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #a8f0c0;
+  letter-spacing: 0.02em;
+}
+
+.apple-static-executive-lead {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--apple-text-secondary, rgba(255, 255, 255, 0.7));
+}
+
+.apple-static-executive-dl {
+  margin: 0;
+}
+
+.apple-static-executive-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 2.2fr);
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  align-items: start;
+}
+
+@media (max-width: 600px) {
+  .apple-static-executive-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.apple-static-executive-dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--apple-text);
+}
+
+.apple-static-executive-dd {
+  margin: 0;
+  color: var(--apple-text-secondary);
+}
+
+.apple-static-executive-row.is-positive .apple-static-executive-dd {
+  color: #b8f0c6;
+}
+.apple-static-executive-row.is-warn .apple-static-executive-dt,
+.apple-static-executive-row.is-warn .apple-static-executive-dd {
+  color: #ffcc5c;
+}
+.apple-static-executive-row.is-neutral .apple-static-executive-dd {
+  color: #c0d4ff;
+}
+
+.apple-static-highlights-tech {
+  margin: 0;
+  padding: 8px 10px 10px;
   background: rgba(255, 69, 58, 0.1);
-  border: 1px solid rgba(255, 90, 80, 0.22);
+  border-top: 1px solid rgba(255, 90, 80, 0.15);
 }
 
 .apple-static-highlights-title {

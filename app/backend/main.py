@@ -37,6 +37,8 @@ MAX_EXTRACT_SIZE_MB = int(os.environ.get("MAX_EXTRACT_SIZE_MB", "500"))
 MAX_EXTRACT_BYTES = MAX_EXTRACT_SIZE_MB * 1024 * 1024
 DEFAULT_ARCHIVE_PASSWORD = "infected"
 EXTRACT_TMPDIR = Path("/tmp/extract")
+# アーカイブ内にさらに zip/7z がある場合、同じパスワードで何階層まで再帰展開するか
+NESTED_ARCHIVE_MAX_DEPTH = int(os.environ.get("NESTED_ARCHIVE_MAX_DEPTH", "32"))
 UNIPACKER_URL = os.environ.get("UNIPACKER_URL", "http://unipacker-worker:8001").rstrip("/")
 AUTO_UNPACK = os.environ.get("AUTO_UNPACK", "1").strip().lower() in ("1", "true", "yes")
 UNPACK_TIMEOUT_SEC = int(os.environ.get("UNPACK_TIMEOUT_SEC", "300"))
@@ -176,6 +178,87 @@ def _is_archive(filepath: Path) -> str | None:
     return None
 
 
+# ZIP 形式だが「1 文書/パッケージ」として扱い、ネスト展開しない（中の xml/ttf までジョブ化しない）
+_NESTED_SKIP_OOXML_SUFFIX: frozenset[str] = frozenset(
+    s.lower()
+    for s in (
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".xlsm",
+        ".docm",
+        ".xlsb",
+        ".xlam",
+        ".dotx",
+        ".dotm",
+        ".potx",
+        ".ppsx",
+        ".ppsm",
+        ".pptm",
+        ".sldm",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".odf",
+        ".odg",
+        ".odc",
+        ".epub",
+    )
+)
+
+
+def _zip_looks_like_document_or_epub_container(filepath: Path) -> bool:
+    """
+    拡張子が無い・.zip だけ、など拡張子推定できないが中身は OOXML / ODF / EPUB のパッケージ
+    である場合。ネスト展開すると slide1.xml 等の内部ファイルまで 1 ジョブずつになるのを防ぐ。
+    """
+    try:
+        with zipfile.ZipFile(str(filepath), "r") as zf:
+            names = [n.replace("\\", "/") for n in zf.namelist() if n and not n.endswith("/")]
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        return False
+    if not names:
+        return False
+    joined = "\n".join(names).lower()
+    if (
+        "word/document.xml" in joined
+        or "ppt/slides/" in joined
+        or "xl/worksheets/sheet" in joined
+        or "xl/worksheets/" in joined
+    ):
+        return True
+    for n in names:
+        seg = n.replace("\\", "/")
+        if seg in ("mimetype",) or seg.rsplit("/", 1)[-1] == "mimetype":
+            try:
+                with zf.open(n) as mf:
+                    h = mf.read(200).lower()
+            except (OSError, KeyError, RuntimeError):
+                continue
+            if b"epub" in h or b"odf" in h or b"opendocument" in h or b"application/vnd.oasis" in h:
+                return True
+    for n in names:
+        if n.replace("\\", "/").lower().startswith("oebps/"):
+            return True
+    return False
+
+
+def _nested_expand_archive_type(filepath: Path) -> str | None:
+    """
+    ネスト展開（パスワード付き BFS）に使う種別。OOXML/ODF/EPUB は中身の zip 群を出さない。
+    中身のパス名でも OOXML/EPUB を検知する（拡張子偽装・拡張子なし用）。
+    """
+    t = _is_archive(filepath)
+    if t is None:
+        return None
+    if t == "zip":
+        if filepath.suffix.lower() in _NESTED_SKIP_OOXML_SUFFIX:
+            return None
+        if _zip_looks_like_document_or_epub_container(filepath):
+            return None
+    return t
+
+
 def _safe_extract_name(name: str) -> str:
     """パストラバーサル対策。ファイル名部分のみ返す。"""
     return Path(name).name
@@ -186,14 +269,16 @@ def _extract_archive(
     password: str,
     extract_dir: Path,
     archive_type: str,
+    acc_size: list[int] | None = None,
 ) -> list[Path]:
     """
-    アーカイブを展開し、展開されたファイルのパスリストを返す。
-    ZIP爆弾対策: 展開合計が MAX_EXTRACT_BYTES を超えたら中断。
+    アーカイブを1段展開し、展開されたファイルのパスリストを返す。
+    ZIP爆弾対策: 累積展開サイズ acc_size（1要素 list）に加算し MAX_EXTRACT_BYTES 超で中断。
     ディレクトリ・隠しファイル・空ファイルはスキップ。
     """
     extracted: list[Path] = []
-    total_size = 0
+    if acc_size is None:
+        acc_size = [0]
 
     if archive_type == "zip":
         with zipfile.ZipFile(str(filepath), "r") as zf:
@@ -205,36 +290,37 @@ def _extract_archive(
                     continue
                 if info.file_size == 0:
                     continue
-                total_size += info.file_size
-                if total_size > MAX_EXTRACT_BYTES:
+                if acc_size[0] + int(info.file_size) > MAX_EXTRACT_BYTES:
                     raise ValueError(
                         "Archive exceeds max extract size (%d MB)" % MAX_EXTRACT_SIZE_MB
                     )
                 pwd_bytes = password.encode("utf-8") if password else None
                 data = zf.read(info.filename, pwd=pwd_bytes)
+                acc_size[0] += len(data)
                 out_path = extract_dir / safe_name
                 counter = 1
                 while out_path.exists():
                     stem = Path(safe_name).stem
                     suffix = Path(safe_name).suffix
-                    out_path = extract_dir / ("%s_%d%s" % (stem, counter, suffix))
+                    out_path = extract_dir / f"{stem}_{counter}{suffix}"
                     counter += 1
                 out_path.write_bytes(data)
                 extracted.append(out_path)
 
     elif archive_type == "7z":
-        tmp_extract = extract_dir / "_7z_tmp"
+        tmp_extract = extract_dir / f"_7z_tmp_{uuid.uuid4().hex[:8]}"
         with py7zr.SevenZipFile(str(filepath), mode="r", password=password or None) as sz:
+            to_add = 0
             for entry in sz.list():
                 if entry.is_directory:
                     continue
-                uc = int(entry.uncompressed or 0)
-                total_size += uc
-                if total_size > MAX_EXTRACT_BYTES:
-                    raise ValueError(
-                        "Archive exceeds max extract size (%d MB)" % MAX_EXTRACT_SIZE_MB
-                    )
-            tmp_extract.mkdir(exist_ok=True)
+                to_add += int(entry.uncompressed or 0)
+            if acc_size[0] + to_add > MAX_EXTRACT_BYTES:
+                raise ValueError(
+                    "Archive exceeds max extract size (%d MB)" % MAX_EXTRACT_SIZE_MB
+                )
+            acc_size[0] += to_add
+            tmp_extract.mkdir(exist_ok=True, parents=True)
             sz.extractall(path=str(tmp_extract))
         try:
             for f in tmp_extract.rglob("*"):
@@ -250,7 +336,7 @@ def _extract_archive(
                 while out_path.exists():
                     stem = Path(safe_name).stem
                     suffix = Path(safe_name).suffix
-                    out_path = extract_dir / ("%s_%d%s" % (stem, counter, suffix))
+                    out_path = extract_dir / f"{stem}_{counter}{suffix}"
                     counter += 1
                 shutil.move(str(f), str(out_path))
                 extracted.append(out_path)
@@ -258,6 +344,59 @@ def _extract_archive(
             shutil.rmtree(str(tmp_extract), ignore_errors=True)
 
     return extracted
+
+
+def _expand_nested_archives_to_leaves(
+    first_extract_paths: list[Path],
+    password: str,
+    work_root: Path,
+    acc_size: list[int],
+) -> list[Path]:
+    """
+    最上位展開のパス群から、zip/7z のネストを同じパスワードで BFS 展開し
+    非圧縮（または階層上限）のファイル列を返す。acc_size は最上位展開と共有。
+    """
+    leaves: list[Path] = []
+    queue: list[tuple[Path, int]] = []
+    for p in first_extract_paths:
+        if not p.is_file():
+            continue
+        queue.append((p, 0))
+    while queue:
+        path, depth = queue.pop(0)
+        t = _nested_expand_archive_type(path)
+        if t is None:
+            leaves.append(path)
+            continue
+        if depth >= NESTED_ARCHIVE_MAX_DEPTH:
+            leaves.append(path)
+            continue
+        nest = work_root / f"nest_{uuid.uuid4().hex[:10]}"
+        nest.mkdir(parents=True, exist_ok=True)
+        try:
+            inner = _extract_archive(path, password, nest, t, acc_size=acc_size)
+        except Exception:
+            # 中身が壊れている/パスワード不一致など
+            if depth == 0:
+                raise
+            # 下位は「このパスを検体として扱う」
+            leaves.append(path)
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if not inner:
+            if depth == 0:
+                raise ValueError("No files extracted from archive")
+            continue
+        for f in inner:
+            if not f.is_file():
+                continue
+            queue.append((f, depth + 1))
+    if not leaves:
+        raise ValueError("No file candidates after nested extraction")
+    return leaves
 
 
 async def _try_unpack(filepath: Path) -> dict[str, Any]:
@@ -322,7 +461,7 @@ async def _try_unpack(filepath: Path) -> dict[str, Any]:
             original_sha = resp.headers.get("x-original-sha256", "")
             unpack_reason = resp.headers.get("x-unpack-reason", "completed")
 
-            unpacked_path = filepath.parent / ("unpacked_%s" % filepath.name)
+            unpacked_path = filepath.parent / f"unpacked_{filepath.name}"
             unpacked_path.write_bytes(unpacked_data)
             result["unpacked"] = True
             result["unpacked_path"] = unpacked_path
@@ -419,7 +558,7 @@ async def _enqueue_binary_from_path(src: Path) -> dict[str, Any]:
     dest = INPUT_DIR / safe_name
     counter = 1
     while dest.exists():
-        dest = INPUT_DIR / ("%s_%d%s" % (Path(safe_name).stem, counter, Path(safe_name).suffix))
+        dest = INPUT_DIR / f"{Path(safe_name).stem}_{counter}{Path(safe_name).suffix}"
         counter += 1
     # tmpfs → input はクロスデバイスのため shutil.move（rename 不可の場合がある）
     shutil.move(str(analysis_target), str(dest))
@@ -535,7 +674,7 @@ async def detect_packer(file: UploadFile = File(...)):
     """Standalone packer detection endpoint (does not trigger unpack)."""
     if not file.filename:
         raise HTTPException(400, detail="Missing filename")
-    tmp = INPUT_DIR / ("_detect_%s_%s" % (uuid.uuid4().hex[:8], Path(file.filename).name))
+    tmp = INPUT_DIR / f"_detect_{uuid.uuid4().hex[:8]}_{Path(file.filename).name}"
     try:
         data = await file.read()
         tmp.write_bytes(data)
@@ -601,17 +740,29 @@ async def upload_binary(
     if archive_type is not None:
         extract_dir = Path(_tempfile.mkdtemp(dir=str(EXTRACT_TMPDIR)))
         try:
-            files = _extract_archive(filepath, archive_password, extract_dir, archive_type)
-            if not files:
+            acc_extract: list[int] = [0]
+            first_layer = _extract_archive(
+                filepath, archive_password, extract_dir, archive_type, acc_size=acc_extract
+            )
+            if not first_layer:
                 raise HTTPException(status_code=400, detail="No files found in archive")
+            try:
+                leaf_files = _expand_nested_archives_to_leaves(
+                    first_layer, archive_password, extract_dir, acc_extract
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not leaf_files:
+                raise HTTPException(status_code=400, detail="No files after nested expansion")
 
             jobs_out: list[dict[str, Any]] = []
-            for f in files:
+            for f in leaf_files:
                 jobs_out.append(await _enqueue_binary_from_path(f))
 
             return {
                 "archive": True,
                 "archive_type": archive_type,
+                "nested_extraction": True,
                 "jobs": [
                     {
                         "job_id": j["job_id"],
@@ -629,7 +780,13 @@ async def upload_binary(
         except HTTPException:
             raise
         except ValueError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
+            msg = str(exc)
+            code = (
+                413
+                if "exceeds" in msg.lower() or "max extract" in msg.lower()
+                else 400
+            )
+            raise HTTPException(status_code=code, detail=msg) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=400,
@@ -878,7 +1035,7 @@ async def download_decompiled(filename: str):
 
 def _write_annotate_status(annotate_id: str, data: dict[str, Any]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / ("%s.annotate_status.json" % annotate_id)
+    path = OUTPUT_DIR / f"{annotate_id}.annotate_status.json"
     tmp_fd, tmp_path = _tempfile.mkstemp(dir=str(OUTPUT_DIR), suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
@@ -891,7 +1048,7 @@ def _write_annotate_status(annotate_id: str, data: dict[str, Any]) -> None:
 
 
 def _read_annotate_status(annotate_id: str) -> dict[str, Any] | None:
-    path = OUTPUT_DIR / ("%s.annotate_status.json" % annotate_id)
+    path = OUTPUT_DIR / f"{annotate_id}.annotate_status.json"
     if not path.is_file():
         return None
     try:

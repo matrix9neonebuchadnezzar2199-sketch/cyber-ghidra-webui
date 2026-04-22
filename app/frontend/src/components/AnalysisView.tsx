@@ -1,11 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, FileUp, Loader2, Minus, Plus, RefreshCw, ScanLine, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ExternalLink,
+  FileUp,
+  Loader2,
+  Minus,
+  Plus,
+  RefreshCw,
+  ScanLine,
+  XCircle,
+} from 'lucide-react';
 import { useApiBase } from '../context/ApiContext';
 import { useAnalysisResult } from '../context/AnalysisResultContext';
 import { AnalysisDetail } from './analysis/AnalysisDetail';
 import { FunctionTree } from './analysis/FunctionTree';
 import { filterFunctionIndices } from './analysis/functionTreeUtils';
 import {
+  buildStaticScanExecutiveSummary,
   extractOverallRiskFromRecord,
   isRiskConcerning,
   presentOverallRisk,
@@ -91,6 +102,13 @@ function jobStatusLine(status: string, mode?: 'ghidra' | 'static_only') {
     return '静的分析に失敗しました';
   }
   return statusLabelJa(status);
+}
+
+function openJobInNewWindow(jobId: string) {
+  if (typeof window === 'undefined' || !jobId) return;
+  const u = new URL(window.location.href);
+  u.searchParams.set('jobId', jobId);
+  window.open(u.toString(), '_blank', 'noopener,noreferrer');
 }
 
 export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => undefined }: AnalysisViewProps) {
@@ -467,32 +485,69 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
           setMessage(null);
           setStatusMessage(`アーカイブから ${count} 件のバイナリを検出しました`);
           if (jobsList.length > 0) {
-            const j0 = jobsList[0] as {
-              job_id?: unknown;
-              filename?: unknown;
-              analysis_mode?: unknown;
-              static_scan?: unknown;
-            };
-            const jid = typeof j0.job_id === 'string' ? j0.job_id : '';
-            const fn = typeof j0.filename === 'string' ? j0.filename : '';
-            const jmode = j0.analysis_mode === 'static_only' ? 'static_only' : 'ghidra';
-            if (jid) {
-              setActiveJob({ id: jid, filename: fn, startedAt: Date.now() });
-              if (j0.static_scan && typeof j0.static_scan === 'object' && jmode === 'static_only') {
-                setScanSummary(JSON.stringify(j0.static_scan, null, 2));
+            const entries: BatchEntry[] = [];
+            for (let i = 0; i < jobsList.length; i += 1) {
+              const j0 = jobsList[i] as {
+                job_id?: unknown;
+                filename?: unknown;
+                analysis_mode?: unknown;
+                static_scan?: unknown;
+                error?: unknown;
+              };
+              const fn = typeof j0.filename === 'string' ? j0.filename : `file-${i + 1}`;
+              const key = `a-${i}-${fn}`;
+              if (j0.error != null && j0.error !== '') {
+                entries.push({
+                  key,
+                  jobId: '',
+                  filename: fn,
+                  analysisMode: 'ghidra',
+                  snapshot: null,
+                  error: String(j0.error),
+                });
+                continue;
               }
-              if (jmode === 'static_only') {
-                const jr = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(jid)}`);
-                if (jr.ok) {
-                  setJobSnapshot((await jr.json()) as JobStatus);
-                } else {
-                  setJobSnapshot(null);
-                }
-              } else {
-                setJobSnapshot(null);
+              const jid = typeof j0.job_id === 'string' ? j0.job_id : '';
+              if (!jid) {
+                entries.push({
+                  key,
+                  jobId: '',
+                  filename: fn,
+                  analysisMode: 'ghidra',
+                  snapshot: null,
+                  error: 'job_id がありません',
+                });
+                continue;
               }
+              const jmode = j0.analysis_mode === 'static_only' ? 'static_only' : 'ghidra';
+              // eslint-disable-next-line no-await-in-loop
+              const jr = await fetch(`${apiBase}/api/jobs/${encodeURIComponent(jid)}`);
+              let snap: JobStatus | null = null;
+              if (jr.ok) {
+                snap = (await jr.json()) as JobStatus;
+              } else if (
+                jmode === 'static_only' &&
+                j0.static_scan &&
+                typeof j0.static_scan === 'object'
+              ) {
+                snap = {
+                  job_id: jid,
+                  status: 'completed',
+                  filename: fn,
+                  analysis_mode: 'static_only',
+                  static_scan: j0.static_scan as Record<string, unknown>,
+                };
+              }
+              entries.push({ key, jobId: jid, filename: fn, analysisMode: jmode, snapshot: snap });
+            }
+            setBatchEntries(entries);
+            const firstOk = entries.find((e) => e.jobId && !e.error) ?? null;
+            if (firstOk) {
+              setSelectedBatchKey(firstOk.key);
+              applyEntryToDetail(firstOk);
             } else {
               setActiveJob(null);
+              setJobSnapshot(null);
             }
           } else {
             setActiveJob(null);
@@ -570,7 +625,10 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
           「検体を選ぶ」で <strong>複数ファイル</strong>を選べます（一括行は下の一覧・各行で切替）。1
           件のとき従来どおり。<strong>PE/ELF 等</strong>は
           <strong> Ghidra</strong> へ、<strong>PDF / Office</strong> 等は
-          <strong> 静的分析</strong>へ、バックエンドが振り分け（ZIP/7z は1件向け。一括行に混ぜない）ます。
+          <strong> 静的分析</strong>へ、バックエンドが振り分け。ZIP/7z
+          はこの欄のパスワードで展開し、<strong>7z や中身用の再展開用 zip のみ同じパスワードで繰り返し展開</strong>（docx/pptx 等は
+          1 ファイル扱いで中身の xml/フォントをばらしません）してからジョブ化。一覧の「
+          別タブ」で行ごとに別ウィンドウで開けます（一括にアーカイブを混ぜないでください）。
         </p>
         <p className="apple-analyze-hint">
           ジョブ欄の見出しが <strong>「Ghidra 解析」</strong> か <strong>「静的分析」</strong> かで処理が分かれます。PDF/Office
@@ -607,7 +665,7 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
         </div>
         <div className="apple-settings-row" style={{ marginTop: 10 }}>
           <span className="apple-api-hint" style={{ whiteSpace: 'nowrap' }}>
-            アーカイブパスワード
+            展開パスワード（各層）
           </span>
           <input
             type="text"
@@ -645,10 +703,9 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
 
         {batchEntries && batchEntries.length > 0 && (
           <div className="apple-batch-queue" role="region" aria-label="一括分析キュー">
-            <h4 className="apple-batch-queue-title">選択したファイル（{batchEntries.length} 件）</h4>
+            <h4 className="apple-batch-queue-title">ジョブ一覧（{batchEntries.length} 件）</h4>
             <p className="apple-batch-queue-hint">
-              行を切り替えると下の詳細・静的分析内容が入れ替わります。Ghidra
-              ジョブは待ち/実行中/％が出ます。静析は即時～数秒で完了扱いです。
+              行を選ぶと下の詳細が切り替わります。各行のバーは解析の進行（100％で完了）。「別タブ」は当該ジョブの解析を別ウィンドウで表示します。静析は数秒で完了扱いです。
             </p>
             <ul className="apple-batch-list">
               {batchEntries.map((e) => {
@@ -663,59 +720,196 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
                   s.progress_percent >= 0
                     ? Math.round(s.progress_percent)
                     : null;
+                const doneStatic =
+                  e.analysisMode === 'static_only' && s?.status === 'completed';
+                const failStatic =
+                  e.analysisMode === 'static_only' && s?.status === 'failed';
+                const doneGh =
+                  e.analysisMode === 'ghidra' && s?.status === 'completed';
+                const failGh = e.analysisMode === 'ghidra' && s?.status === 'failed';
                 return (
-                  <li key={e.key}>
-                    <button
-                      type="button"
-                      className={
-                        e.key === selectedBatchKey
-                          ? 'apple-batch-row is-selected'
-                          : 'apple-batch-row'
-                      }
-                      onClick={() => {
-                        setSelectedBatchKey(e.key);
-                        const cur = batchEntriesRef.current?.find((x) => x.key === e.key);
-                        if (cur) applyEntryToDetail(cur);
-                      }}
-                    >
-                      <span className="apple-batch-name">{e.filename}</span>
-                      {e.error ? (
-                        <span className="apple-batch-status apple-batch-status--err">{e.error}</span>
-                      ) : e.analysisMode === 'static_only' ? (
-                        <span
-                          className={
-                            s
-                              ? `apple-risk apple-risk--${pr.tone}`
-                              : 'apple-batch-status'
-                          }
-                        >
-                          {s ? pr.label : '…'}
-                        </span>
-                      ) : (
-                        <span className="apple-batch-gh">
-                          {s?.status === 'running' && pct != null
-                            ? `Ghidra ${pct}%`
-                            : s?.status || '—'}
-                        </span>
-                      )}
-                    </button>
-                    {!e.error && s?.analysis_mode === 'ghidra' && s.status === 'running' && (
-                      <div
-                        className="apple-progress-track apple-progress-track--determinate"
-                        style={{ marginTop: 4 }}
-                        role="progressbar"
-                        aria-valuenow={pct ?? 0}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
+                  <li key={e.key} className="apple-batch-item">
+                    <div className="apple-batch-item-row">
+                      <button
+                        type="button"
+                        className={
+                          e.key === selectedBatchKey
+                            ? 'apple-batch-row is-selected'
+                            : 'apple-batch-row'
+                        }
+                        onClick={() => {
+                          setSelectedBatchKey(e.key);
+                          const cur = batchEntriesRef.current?.find((x) => x.key === e.key);
+                          if (cur) applyEntryToDetail(cur);
+                        }}
                       >
-                        <div
-                          className="apple-progress-fill apple-progress-fill--determinate"
-                          style={{
-                            width: `${Math.min(100, Math.max(0, typeof pct === 'number' ? pct : 0))}%`,
+                        <span className="apple-batch-name">{e.filename}</span>
+                        {e.error ? (
+                          <span className="apple-batch-status apple-batch-status--err">{e.error}</span>
+                        ) : e.analysisMode === 'static_only' ? (
+                          <span
+                            className={
+                              s
+                                ? `apple-risk apple-risk--${pr.tone}`
+                                : 'apple-batch-status'
+                            }
+                          >
+                            {failStatic
+                              ? '失敗'
+                              : doneStatic
+                                ? '完了'
+                                : s
+                                  ? pr.label
+                                  : '…'}
+                          </span>
+                        ) : (
+                          <span className="apple-batch-gh">
+                            {s?.status === 'running' && pct != null
+                              ? `Ghidra ${pct}%`
+                              : s?.status === 'completed'
+                                ? '完了'
+                                : s?.status === 'failed'
+                                  ? '失敗'
+                                  : s?.status || '—'}
+                          </span>
+                        )}
+                      </button>
+                      {e.jobId && !e.error ? (
+                        <button
+                          type="button"
+                          className="apple-batch-external"
+                          onClick={() => {
+                            openJobInNewWindow(e.jobId);
                           }}
-                        />
-                      </div>
-                    )}
+                          title="このジョブの解析を別タブで開く"
+                        >
+                          <ExternalLink size={16} strokeWidth={2.25} aria-hidden />
+                          別タブ
+                        </button>
+                      ) : null}
+                    </div>
+                    {!e.error && e.jobId
+                      ? (() => {
+                          if (e.analysisMode === 'static_only') {
+                            if (failStatic) {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--error"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill apple-progress-fill--full" />
+                                </div>
+                              );
+                            }
+                            if (doneStatic) {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--done"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill apple-progress-fill--full" />
+                                </div>
+                              );
+                            }
+                            if (!s) {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--indeterminate"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill" />
+                                </div>
+                              );
+                            }
+                            if (s.status === 'running') {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--indeterminate"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill" />
+                                </div>
+                              );
+                            }
+                            return (
+                              <div
+                                className="apple-progress-track apple-progress-track--indeterminate"
+                                style={{ marginTop: 4 }}
+                              >
+                                <div className="apple-progress-fill" />
+                              </div>
+                            );
+                          }
+                          if (e.analysisMode === 'ghidra' && s) {
+                            if (failGh) {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--error"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill apple-progress-fill--full" />
+                                </div>
+                              );
+                            }
+                            if (doneGh) {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--done"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill apple-progress-fill--full" />
+                                </div>
+                              );
+                            }
+                            if (s.status === 'running') {
+                              if (pct != null) {
+                                return (
+                                  <div
+                                    className="apple-progress-track apple-progress-track--determinate"
+                                    style={{ marginTop: 4 }}
+                                    role="progressbar"
+                                    aria-valuenow={pct}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                  >
+                                    <div
+                                      className="apple-progress-fill apple-progress-fill--determinate"
+                                      style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                                    />
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--indeterminate"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill" />
+                                </div>
+                              );
+                            }
+                            if (s.status === 'queued') {
+                              return (
+                                <div
+                                  className="apple-progress-track apple-progress-track--indeterminate"
+                                  style={{ marginTop: 4 }}
+                                >
+                                  <div className="apple-progress-fill" />
+                                </div>
+                              );
+                            }
+                            return null;
+                          }
+                          return (
+                            <div
+                              className="apple-progress-track apple-progress-track--indeterminate"
+                              style={{ marginTop: 4 }}
+                            >
+                              <div className="apple-progress-fill" />
+                            </div>
+                          );
+                        })()
+                      : null}
                   </li>
                 );
               })}
@@ -901,21 +1095,52 @@ export function AnalysisView({ reopenJobId = null, onReopenConsumed = () => unde
               {jobIsStaticOnly && jobSnapshot?.static_scan && (() => {
                 const o = jobSnapshot.static_scan;
                 const risk = extractOverallRiskFromRecord(o);
+                const exec = buildStaticScanExecutiveSummary(o);
                 const lines = staticScanHighlightLines(o, 10);
-                if (!lines.length && !isRiskConcerning(risk)) return null;
+                if (exec.length === 0 && lines.length === 0) return null;
                 return (
                   <div className="apple-static-highlights" role="status">
-                    {isRiskConcerning(risk) && (
-                      <p className="apple-static-highlights-title">要確認: 中〜高リスクの所見（抜粋）</p>
+                    {exec.length > 0 && (
+                      <div className="apple-static-executive">
+                        <p className="apple-static-executive-title">判定の要点（共有・報告用）</p>
+                        <p className="apple-static-executive-lead">
+                          下の <strong>総合 risk</strong> や「中〜高」の1行所見は、<strong>構造上の指標</strong>（例:
+                          外部リレーション件数）で上がることがあります。まずは下表でマクロ等の有無を確認してください。
+                        </p>
+                        <dl className="apple-static-executive-dl">
+                          {exec.map((it, i) => (
+                            <div
+                              key={i}
+                              className={
+                                it.level === 'positive'
+                                  ? 'apple-static-executive-row is-positive'
+                                  : it.level === 'negative' || it.level === 'caution'
+                                    ? 'apple-static-executive-row is-warn'
+                                    : 'apple-static-executive-row is-neutral'
+                              }
+                            >
+                              <dt className="apple-static-executive-dt">{it.label}</dt>
+                              <dd className="apple-static-executive-dd">{it.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
                     )}
                     {lines.length > 0 && (
-                      <ul className="apple-static-highlights-ul">
-                        {lines.map((l, i) => (
-                          <li key={i} className="apple-static-highlights-li">
-                            {l}
-                          </li>
-                        ))}
-                      </ul>
+                      <div className="apple-static-highlights-tech">
+                        <p className="apple-static-highlights-title">
+                          {isRiskConcerning(risk)
+                            ? '技術メモ: 中〜高と判定された生の所見（抜粋）'
+                            : '技術メモ（抜粋）'}
+                        </p>
+                        <ul className="apple-static-highlights-ul">
+                          {lines.map((l, i) => (
+                            <li key={i} className="apple-static-highlights-li">
+                              {l}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 );
