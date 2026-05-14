@@ -1,169 +1,487 @@
 # Cyber Ghidra WebUI
-リバースエンジニアリング用 Docker 管理ツール
 
-## UI
+> Docker で完結する **Ghidra ヘッドレス解析 + 静的スキャナー + LLM 関数注釈** のオールインワン WebUI
 
-フロントエンドは [awesome-design-md-jp / Apple Japan](https://github.com/matrix9neonebuchadnezzar2199-sketch/awesome-design-md-jp/tree/main/design-md/apple) の `DESIGN.md`（タイポグラフィ・カラー・ピル型 CTA・ナビのすりガラス）に準拠しています。
+検体をブラウザにドロップするだけで、自動展開 → アンパッキング → Ghidra 逆コンパイル → 静的多段スキャン → LLM 注釈までを一気通貫で回せる、リバースエンジニアリング作業者向けのローカル解析プラットフォームです。
 
-## 起動方法
-1. Windows側で start.bat を実行
-2. AMD/NVIDIA環境を選択
-3. ブラウザで http://localhost:3001 を開く
+[![Made with FastAPI](https://img.shields.io/badge/backend-FastAPI%200.109+-009688)](https://fastapi.tiangolo.com/)
+[![Frontend Vite](https://img.shields.io/badge/frontend-React%2018%20+%20Vite-646CFF)](https://vitejs.dev/)
+[![Ghidra](https://img.shields.io/badge/Ghidra-11.3.1%20+%20JDK%2021-orange)](https://ghidra-sre.org/)
+[![Docker](https://img.shields.io/badge/runtime-docker--compose-2496ED)](https://docs.docker.com/compose/)
+[![Status](https://img.shields.io/badge/status-active-success)]()
 
-### ワーカーのスケールについて
+---
 
-`ghidra-worker` はファイルシステムベースのキュー（`queue/pending/` → `queue/processing/` → `queue/done/`）を
-使用しており、**ワーカーは 1 インスタンスのみ**を前提としています。
+## 目次
 
-```bash
-# これは非対応（ジョブの競合が発生します）
-docker compose up -d --scale ghidra-worker=2
+- [できること](#できること)
+- [クイックスタート](#クイックスタート)
+- [アーキテクチャ](#アーキテクチャ)
+- [解析パイプライン](#解析パイプライン)
+- [セキュリティモデル](#セキュリティモデル)
+- [API リファレンス](#api-リファレンス)
+- [環境変数](#環境変数)
+- [静的解析スキャナー](#静的解析スキャナー)
+- [LLM 関数注釈](#llm-関数注釈)
+- [開発](#開発)
+- [運用上の注意](#運用上の注意)
+- [謝辞](#謝辞)
+
+---
+
+## できること
+
+| 領域 | 内容 |
+|---|---|
+| **検体投入** | ブラウザに D&D。バッチ複数ファイル投入対応。`infected` パスワード付き ZIP / 7z は自動再帰展開（最大 32 階層） |
+| **アンパッキング** | Unipacker による PE 自動アンパック。複数レイヤー対応、ヒューリスティクスでパッカー検知後に起動 |
+| **逆コンパイル** | Ghidra 11.3.1 ヘッドレスで関数情報・デコンパイル C・CFG・コールグラフを抽出 |
+| **静的解析** | oletools / pdfid / pefile / LIEF / capa / binwalk / androguard を MIME に応じて自動選択。リスクスコアを集約 |
+| **LLM 注釈** | OpenAI 互換 API (Ollama / LM Studio) を呼び、関数ごとに目的・suspicious API 解釈を生成 |
+| **ジョブ管理** | ファイルシステム ベース キュー + 履歴 UI。再オープン・差分比較・フォントサイズ制御 |
+| **GPU 加速** | AMD ROCm (Radeon) / NVIDIA CUDA / CPU の 3 モード切替 (`start.bat`) |
+
+---
+
+## クイックスタート
+
+### 必要環境
+
+- Docker Desktop または Docker Engine + Compose v2
+- 推奨 RAM 16GB 以上、ディスク空き 20GB 以上
+- (任意) AMD Radeon (ROCm) または NVIDIA GPU + nvidia-container-runtime
+
+### Windows
+
+```cmd
+git clone https://github.com/matrix9neonebuchadnezzar2199-sketch/cyber-ghidra-webui.git
+cd cyber-ghidra-webui
+copy .env.example .env
+start.bat
 ```
 
-複数ワーカーでの並列解析が必要な場合は、Redis や PostgreSQL ベースのジョブキュー
-（arq, Celery 等）への移行を検討してください。
+`start.bat` は `MAGI` ブートメニューを表示します:
 
-### `requirements.txt` を変えたあと（`ModuleNotFoundError` 対策）
+```
+1. AMD Radeon Mode    (ROCm + HSA_OVERRIDE_GFX_VERSION=11.0.0)
+2. NVIDIA GeForce Mode
+3. CPU Only Mode
+```
 
-バックエンドの依存は **イメージビルド時** に `/opt/venv` へ入ります。現行の `docker-compose.yml` では **`backend` / `ghidra-worker` に `./app/backend` のホストマウントはありません**（アプリコードはイメージに焼き込み）。そのため **`app/backend/requirements.txt` を変えたら必ずイメージを再ビルド**してください。
+起動後、ブラウザで [http://localhost:3001](http://localhost:3001) を開いてください。
 
-一方、`./scripts/ghidra` はコンテナ内 `/ghidra-scripts` に **バインドマウント**されるため、`auto_analyze.py` 等の変更は **再ビルドなしで** `ghidra-worker` 再起動後に反映されます（Python 依存の追加は上記とおり再ビルドが必要）。
+### Linux / WSL2
 
 ```bash
-docker compose build backend ghidra-worker
+git clone https://github.com/matrix9neonebuchadnezzar2199-sketch/cyber-ghidra-webui.git
+cd cyber-ghidra-webui
+cp .env.example .env
+
+# CPU / NVIDIA
 docker compose up -d
+
+# AMD ROCm
+docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d
 ```
 
-**Python（`main.py`・`sample_pipeline.py` 等）の改修**は `requirements.txt` 変更と同様、**イメージ再ビルド**しないと反映されません（`git pull` 直後の「PDF がまだ Ghidra に行く」等は、未コミット/未再ビルド/レイヤーキャッシュの疑い。確実に反映したい場合は
-`docker compose build --no-cache backend ghidra-worker` を実行してください）。フロントは `./app/frontend` ビルドなので、UI 変更は `docker compose build frontend` か Compose のフロントサービスに従います。
-
-バックエンドイメージの Java は **Ghidra 11.3.1+ 向けに JDK 21**（Eclipse Temurin をマルチステージで `/opt/java/openjdk` に配置。`javac` 含む）です。
-
-## 使い方
-
-### 暗号化アーカイブの自動展開
-
-パスワード付き ZIP / 7z をアップロードすると、**UI で指定したパスワード**（未指定時は `infected`）で**最外層を展開**し、出てきたファイルのうち **再び zip/7z なら同じパスワードで展開**を繰り返し、**最終的に残る非アーカイブ**を個別ジョブにします。ネストの深さは `NESTED_ARCHIVE_MAX_DEPTH` で打ち止め、それ以上はそのパスを検体として扱います。
-
-- デフォルトパスワード: `infected`（全層で同じ文字列を試行）
-- 複数ファイルを含む / 入れ子アーカイブの**累積展開**は、合計で `MAX_EXTRACT_SIZE_MB` まで
-- 展開処理は backend コンテナ内で完結
-
-環境変数:
-
-| 変数名 | デフォルト | 説明 |
-|---|---|---|
-| `MAX_EXTRACT_SIZE_MB` | `500` | 展開累積の合計サイズ上限（MB） |
-| `NESTED_ARCHIVE_MAX_DEPTH` | `32` | zip/7z の入れ子を何階層まで展開するか |
-
-### 検体ファイルの隔離
-
-アップロードされたバイナリ（アーカイブから展開されたものを含む）は Docker の名前付きボリューム `cyber_input` に保存されます。ホスト側のファイルエクスプローラーには表示されないため、ウイルス対策ソフトによる誤検知や誤実行のリスクがありません。
-
-- **Ghidra 解析に成功した**ジョブについて、ghidra-worker が `/app/input` 上の検体を削除します（失敗・タイムアウト時は静的分析用に検体を残します）
-- ボリュームを手動でクリアする場合: `docker volume rm cyber-ghidra-webui-main_cyber_input`
-- ボリュームの中身を確認する場合: `docker run --rm -v cyber-ghidra-webui-main_cyber_input:/data alpine ls -la /data`
-
-> **注意**: プロジェクトルートに残っている `./input/` フォルダは今後使用しません。既存ファイルがあれば削除して構いません。
-
-## LLM アノテーション（`POST /api/annotate/{job_id}`）
-
-解析済みジョブに対して LLM による関数アノテーションを実行します。
-リクエストは **202 Accepted** を即座に返し、バックグラウンドで処理します。
-
-### 基本フロー
+### 動作確認
 
 ```bash
-# 1. アノテーション開始（202 が返る）
+curl http://localhost:8000/health
+# → {"status": "healthy", "ghidra_available": true, ...}
+```
+
+---
+
+## アーキテクチャ
+
+```mermaid
+flowchart LR
+    subgraph "ブラウザ"
+        UI[React + Vite<br/>:3001]
+    end
+
+    subgraph "Docker network: default"
+        BE[backend<br/>FastAPI :8000]
+        UP[unipacker-worker<br/>:8001<br/><i>cap_drop, no-new-priv</i>]
+        GW[ghidra-worker<br/><b>network: none</b><br/><i>read_only, cap_drop</i>]
+        GS[ghidra-server<br/>blacktop/ghidra<br/>:13100-13102]
+    end
+
+    subgraph "Persistent"
+        VOL[(cyber_input<br/>volume)]
+        OUT[(./output)]
+        Q[(./queue<br/>pending/processing/done)]
+        SCR[(./scripts/ghidra<br/>auto_analyze.py)]
+    end
+
+    UI -- "REST + multipart" --> BE
+    BE -- "POST /unpack" --> UP
+    BE -- "enqueue" --> Q
+    GW -- "poll" --> Q
+    GW -- "headless analyze" --> SCR
+    BE -- "save sample" --> VOL
+    GW -- "read sample" --> VOL
+    GW -- "write JSON" --> OUT
+    BE -- "read JSON" --> OUT
+    GS -.-> OUT
+```
+
+### 主要コンポーネント
+
+| サービス | ベース | 役割 |
+|---|---|---|
+| **frontend** | Vite + React 18 | UI、ジョブ履歴、CFG/コールグラフ可視化 (xyflow + ELK) |
+| **backend** | FastAPI 0.109+ | アップロード受付、ルーティング、静的スキャン、LLM 注釈オーケストレーション |
+| **ghidra-worker** | Ghidra 11.3.1 + JDK 21 (Temurin) | キュー監視、`analyzeHeadless` + Jython スクリプト実行 |
+| **unipacker-worker** | python:3-slim | Unipacker による PE アンパック微小サービス |
+| **ghidra-server** | `blacktop/ghidra:latest` | (任意) チーム共同利用のための Ghidra リポジトリサーバー |
+
+### ジョブキュー
+
+ファイルシステム ベースで実装されています:
+
+```
+queue/
+├── pending/     ← backend がエンキュー
+├── processing/  ← worker が atomic mv して処理中
+└── done/        ← 完了後にフラグ
+```
+
+→ Redis や RabbitMQ への依存ゼロ。**ただしワーカーは 1 インスタンス前提** (詳細: [運用上の注意](#運用上の注意))。
+
+---
+
+## 解析パイプライン
+
+検体は **MIME 自動判別 (libmagic 優先)** で 2 系統にルーティングされます:
+
+```mermaid
+flowchart TD
+    A[アップロード] --> B{暗号化 ZIP/7z?}
+    B -- Yes --> C[再帰展開<br/>infected パスワード]
+    B -- No --> D[MIME 判別]
+    C --> D
+    D --> E{ネイティブ実行ファイル?<br/>PE / ELF / Mach-O}
+    E -- Yes --> F{パッカー検知?}
+    F -- Yes --> G[unipacker-worker<br/>自動アンパック]
+    F -- No --> H[Ghidra worker enqueue]
+    G --> H
+    E -- No --> I[静的解析のみ<br/>PDF / Office / APK / RTF / MSI]
+    H --> J[Ghidra Headless<br/>+ auto_analyze.py]
+    J --> K[結果 JSON<br/>output/]
+    I --> K
+    K --> L["UI 表示<br/>(任意) LLM 注釈"]
+```
+
+| 拡張対象 | 既定の処理 |
+|---|---|
+| `.exe` / `.dll` / `.sys` (PE) | パッカー検知 → 必要なら unpack → Ghidra |
+| ELF / Mach-O | Ghidra 直行 |
+| `.pdf` / Office (`.docx`, `.xlsm` 等) | 静的スキャナーのみ (oletools / pdfid) |
+| `.apk` / DEX | androguard |
+| `.zip` / `.7z` (Office 以外) | 再帰展開して各 entry を再投入 |
+
+---
+
+## セキュリティモデル
+
+研究用ツールのため、**実行可能性を持つ検体を扱う前提**で多段防御を組んでいます。
+
+### 検体の扱い
+
+- **ホスト不可視**: アップロードされた検体は Docker named volume `cyber_input` に保存されます。ホスト FS には現れず、AV の誤検知や誤実行を防ぎます
+- **解析後の自動削除**: Ghidra 解析が成功したジョブの検体は `ghidra-worker` が `/app/input` から削除します (失敗時は静的解析用に保持)
+- **手動クリア**: `docker volume rm cyber-ghidra-webui-main_cyber_input`
+
+### コンテナハードニング
+
+| サービス | network | filesystem | capabilities | privilege |
+|---|---|---|---|---|
+| `ghidra-worker` | **none** (隔離) | `read_only`, tmpfs `/tmp` 2GB | `cap_drop: ALL` | `no-new-privileges` |
+| `unipacker-worker` | default | tmpfs `/tmp` 2GB | `cap_drop: ALL` | `no-new-privileges` |
+| `backend` | default | tmpfs `/tmp/extract` 1GB (`noexec,nosuid,nodev`) | (デフォルト) | (デフォルト) |
+| `ghidra-server` | port-forward `127.0.0.1` のみ | bind mount | (デフォルト) | (デフォルト) |
+
+> **`ghidra-worker` は外部ネットワークから完全に切り離されている** 点が重要です。検体内のシェルコードや Ghidra 拡張からの C2 接続を遮断します。
+
+### 展開時のリソース制限
+
+- 暗号アーカイブの累積展開サイズ: `MAX_EXTRACT_SIZE_MB` (既定 500 MB) で打ち止め
+- ネスト展開深度: `NESTED_ARCHIVE_MAX_DEPTH` (既定 32 階層)
+- アンパック試行レイヤー: `UNPACK_MAX_LAYERS` (既定 3)
+
+→ Zip-bomb / Tar-slip 系の DoS と path traversal を緩和。
+
+---
+
+## API リファレンス
+
+ベース URL: `http://localhost:8000`
+
+### コア
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| `GET` | `/` | サービス疎通 |
+| `GET` | `/health` | Ghidra / worker / 依存の死活確認 |
+| `POST` | `/api/upload` | 検体アップロード (multipart, パスワード指定可) |
+| `POST` | `/api/detect-packer` | パッカー検知のみ実行 (アンパックは行わない) |
+| `GET` | `/api/unpack/health` | unipacker-worker の死活確認 |
+
+### ジョブ
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| `GET` | `/api/jobs` | 全ジョブの状態一覧 |
+| `GET` | `/api/jobs/{job_id}` | 特定ジョブの状態 / 進捗 |
+| `GET` | `/api/results` | 完了結果 JSON 一覧 |
+| `GET` | `/api/results/{filename}` | 結果 JSON 取得 |
+| `GET` | `/api/results/{filename}/decompiled` | 全関数のデコンパイル C を結合した `.c` テキスト |
+
+### 静的解析 (`scanners/router.py`)
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| `GET` | `/api/scan/scanners` | 登録済みスキャナー一覧 |
+| `POST` | `/api/scan/{job_id}` | 該当ジョブにスキャン実行 (`{"scanners": [...]}` 省略時は MIME に応じ自動選択) |
+
+### LLM 注釈
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| `POST` | `/api/annotate/{job_id}` | バックグラウンドで関数注釈ジョブ起動 (即座に **202 Accepted**) |
+| `GET` | `/api/annotate/status/{annotate_id}` | 進捗ポーリング (`completed_functions / total_functions`) |
+| `GET` | `/api/annotate/result/{annotate_id}` | 完了後の注釈結果取得 |
+
+詳細フロー:
+
+```bash
+# 1. アノテーション開始
 curl -X POST http://localhost:8000/api/annotate/{job_id} \
   -H "Content-Type: application/json" \
   -d '{"strategy":"suspicious_only"}'
-# → { "status": "accepted", "annotate_id": "...", ... }
 
-# 2. 進捗ポーリング
+# 2. ポーリング
 curl http://localhost:8000/api/annotate/status/{annotate_id}
-# → { "status": "running", "completed_functions": 12, "total_functions": 30, ... }
 
-# 3. 完了後に結果取得
+# 3. 結果取得
 curl http://localhost:8000/api/annotate/result/{annotate_id}
 ```
 
-### strategy
+---
 
-- `suspicious_only`（既定）: 疑わしい API を呼んでいる関数のみ。対象が少なく数分以内に完了しやすい
-- `top_n`: デコンパイル済み関数をサイズ降順で上位 N 件（`top_n` パラメータで指定）
-- `all`: デコンパイル済み全関数。関数数が **`ANNOTATE_ALL_MAX_FUNCTIONS`（既定 100）** を超える場合は 400 で拒否
+## 環境変数
 
-### 環境変数
+`.env.example` をコピーして `.env` に配置。`docker-compose` がプロジェクトルートの `.env` を自動読み込みします。
 
-| 変数 | 既定値 | 説明 |
+### Backend / Ghidra
+
+| 変数 | 既定 | 説明 |
 |---|---|---|
-| `LLM_API_URL` | `http://host.docker.internal:11434/v1` | OpenAI 互換 API（Ollama 等） |
-| `LLM_MODEL` | `llama3` | 使用モデル |
-| `LLM_TIMEOUT_SEC` | `120` | 1 関数あたりの LLM タイムアウト |
-| `LLM_USE_JSON_MODE` | `1` | JSON モードを要求するか |
+| `GHIDRA_HOME` | `/opt/ghidra` | コンテナ内 Ghidra インストールパス |
+| `GHIDRA_TIMEOUT_SEC` | `600` | ヘッドレス解析のタイムアウト |
+| `GHIDRA_PROJECT_ROOT` | `/workspace/ghidra_projects` | 解析プロジェクト保存先 |
+| `WORKER_POLL_SEC` | `2` | キュー監視間隔 |
+| `CORS_ORIGINS` | `http://localhost:3001` | カンマ区切り。`localhost` と `127.0.0.1` は自動展開 |
+| `MAX_UPLOAD_SIZE_MB` | `200` | アップロード最大サイズ |
+| `MAX_EXTRACT_SIZE_MB` | `500` | アーカイブ展開累積上限 |
+| `NESTED_ARCHIVE_MAX_DEPTH` | `32` | 入れ子展開の最大階層 |
+
+### Auto-unpacker (Unipacker)
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `AUTO_UNPACK` | `1` | 自動アンパック有効化 |
+| `UNIPACKER_URL` | `http://unipacker-worker:8001` | unipacker-worker エンドポイント |
+| `UNPACK_TIMEOUT_SEC` | `300` | 1 検体あたりのアンパック上限 |
+| `UNPACK_MAX_SIZE_MB` | `200` | アンパック対象の最大サイズ |
+| `UNPACK_MAX_LAYERS` | `3` | 多層アンパックの最大レイヤー |
+
+### LLM 注釈
+
+| 変数 | 既定 | 説明 |
+|---|---|---|
+| `LLM_API_URL` | `http://host.docker.internal:11434/v1` | OpenAI 互換 API (Ollama / LM Studio) |
+| `LLM_MODEL` | `llama3` | 使用モデル名 |
+| `LLM_TIMEOUT_SEC` | `120` | 1 関数あたりのタイムアウト |
+| `LLM_USE_JSON_MODE` | `1` | JSON モード要求 (拒否されるサーバなら `0`) |
 | `ANNOTATE_ALL_MAX_FUNCTIONS` | `100` | `strategy=all` の上限 |
 
-## 静的解析スキャナー（`GET/POST /api/scan/*`）
+---
 
-アップロード済みジョブの検体に対し、oletools / pdfid / pefile / LIEF / capa / binwalk / androguard 等の**静的解析**をバックエンド上で実行します（YARA は未実装スタブ）。Ghidra 解析完了を待たず、キュー登録直後に実行可能です（検体が `/app/input` 上に存在する必要があります）。
+## 静的解析スキャナー
 
-| メソッド | パス | 説明 |
-|----------|------|------|
-| `GET` | `/api/scan/scanners` | 登録済みスキャナー一覧（`name` / `supported_types` / `match_all`） |
-| `POST` | `/api/scan/{job_id}` | 当該ジョブのファイルをスキャン。body `{"scanners": ["pdfid", ...]}` 省略時は MIME に応じ自動選択 |
+`app/backend/scanners/plugins/` にプラグインとして配置。`registry.py` で MIME ベース自動マッチ。
 
-**検体パス解決**: `queue/pending` / `queue/processing` / `queue/done` いずれかの `{job_id}.json` 内 `filepath`、または `output/{job_id}.status.json` の `filename` から `/app/input` 上の実ファイルを参照します。
+| Plugin | 対象 MIME | 主な抽出 |
+|---|---|---|
+| `pefile_scanner` | `application/x-dosexec`, `application/x-msdownload` | imports / exports / sections / TLS / Resource / RICH header |
+| `lief_scanner` | PE / ELF / Mach-O | PIE / NX / canary / 署名情報 |
+| `oletools_scanner` | Word / Excel / PowerPoint (OLE) | VBA マクロ抽出、suspicious キーワード |
+| `pdfid_scanner` | `application/pdf` | `/JS` `/JavaScript` `/AA` `/OpenAction` 等のフラグカウント |
+| `capa_scanner` | PE / ELF / shellcode | capa rule マッチ → MITRE ATT&CK タグ |
+| `binwalk_scanner` | 任意バイナリ | 埋め込みリソース検出、エントロピーマップ |
+| `androguard_scanner` | `.apk` / DEX | パーミッション、receiver、suspicious API |
+| `yara_scanner` | (stub) | 将来実装予定 |
 
-`curl` の例（`job_id` をアップロードレスポンスの値に置き換え）:
+集約ロジック (`scanners/runner.py`):
+- 各プラグインの `risk` を `low / medium / high / critical` で正規化
+- `determine_overall_risk()` が最大値で集約
 
-```bash
-curl -sS http://localhost:8000/api/scan/scanners
-curl -sS -X POST "http://localhost:8000/api/scan/YOUR_JOB_ID" \
-  -H "Content-Type: application/json" -d '{}'
-# 特定スキャナーのみ: -d '{"scanners":["pdfid","binwalk"]}'
+`POST /api/scan/{job_id}` body 例:
+
+```json
+{ "scanners": ["pdfid", "binwalk"] }
 ```
 
-依存追加は `app/backend/requirements.txt` 経由のため、変更後は **`docker compose build backend`（`ghidra-worker` を触った場合は併せて再ビルド）**を実行してください。Docker イメージに `binwalk` と `libmagic1` が含まれます。
+省略時は MIME に応じて該当する全プラグインを起動します。
 
-## テスト（バックエンド・スキャナー）
+---
 
-`app/backend` をカレントにし、仮想環境で依存を入れたうえで実行します。
+## LLM 関数注釈
 
-```bash
-cd app/backend
-pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest
-# またはプロジェクトルートから一括
-bash scripts/quality_check.sh
-```
+Ghidra 解析済みジョブに対し、デコンパイル C を入力として **関数の目的・呼ぶ API の解釈** を LLM に書かせます。
 
-- テスト本体: `app/backend/scanners/tests/`（レジストリ、runner、プラグイン、**FastAPI 経由の API 結合**を含む）
-- `oletools` の警告（pyparsing 非推奨）が表示される場合があります（依存側の挙動）
+### 戦略 (`strategy`)
 
-## コード品質（Ruff）
+| 値 | 対象 | 用途 |
+|---|---|---|
+| `suspicious_only` (既定) | suspicious API (CreateRemoteThread / VirtualAlloc / WinExec 等) を呼ぶ関数のみ | 数分以内に完了。triage 向け |
+| `top_n` | サイズ降順で上位 N 件 (`top_n` パラメータ) | 中規模検体の俯瞰 |
+| `all` | デコンパイル済み全関数 | `ANNOTATE_ALL_MAX_FUNCTIONS` (既定 100) 超で 400 拒否 |
 
-[Ruff](https://docs.astral.sh/ruff/) による `lint` と `format` の確認を行います。`pyproject.toml` は `app/backend` にあり、レガシー行の `main.py` / `worker.py` / `annotator.py` は**除外**（新規 `scanners/` 等の品質にフォーカス）しています。
+### 推奨ローカル LLM
+
+- [Ollama](https://ollama.ai/) + `llama3` / `llama3:70b` / `qwen2.5-coder`
+- [LM Studio](https://lmstudio.ai/) (OpenAI 互換 API モード)
+
+`host.docker.internal:11434` で macOS / Windows Docker Desktop からホストに到達可能。Linux 環境では `--add-host=host.docker.internal:host-gateway` を `docker-compose` に追加してください。
+
+---
+
+## 開発
+
+### バックエンド (Ruff + pytest)
 
 ```bash
 cd app/backend
 pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
 ruff format --check .
+python -m pytest
 ```
 
-Windows / Linux 共通の一括実行: `scripts/quality_check.ps1` または `scripts/quality_check.sh`（`ruff check` → `ruff format --check` → `pytest`）。
+レガシー の `main.py` / `worker.py` / `annotator.py` は `pyproject.toml` で **lint 除外**。`scanners/` ディレクトリの新コードは strict 適用。
 
-## スモークテスト（E2E）
+### 一括品質チェック
 
-- WSL2 / Linux: `bash scripts/smoke_test.sh`（引数省略時は `/bin/ls` のコピーを使用）
-- Windows: `powershell -File scripts/smoke_test.ps1`（アップロードに `curl.exe` を使用。プロキシが異なる環境では `Invoke-RestMethod` へ統一するなど調整してください）
+```bash
+# Linux / WSL2
+bash scripts/quality_check.sh
 
-フローは「ヘルス → unipacker → 検体アップロード → ジョブ完了まで待機」です。静的解析 API は上記 **「静的解析スキャナー」** または結合テスト（`scanners/tests/test_api_integration.py`）で補完できます。
+# Windows
+powershell -File scripts/quality_check.ps1
+```
 
-### 想定操作フロー（参考）
+→ `ruff check` → `ruff format --check` → `pytest` を順次実行。
 
-1. ブラウザで検体をアップロード（または `POST /api/upload`）し `job_id` を取得
-2. （任意）`POST /api/scan/{job_id}` で静的分析を実行
-3. Ghidra 完了待ち `GET /api/jobs/{job_id}` まで待機
-4. （任意）`POST /api/annotate/{job_id}` で LLM 注釈
+### スモークテスト (E2E)
+
+```bash
+# Linux / WSL2 (引数省略時は /bin/ls のコピーを使用)
+bash scripts/smoke_test.sh
+
+# Windows
+powershell -File scripts/smoke_test.ps1
+```
+
+フロー: ヘルス確認 → unipacker 死活 → 検体アップロード → ジョブ完了待機。
+
+### フロントエンド (任意)
+
+ローカル開発時は `app/frontend` で Vite dev server を起動できます:
+
+```bash
+cd app/frontend
+npm install
+npm run dev
+```
+
+UI は [awesome-design-md-jp / Apple Japan](https://github.com/matrix9neonebuchadnezzar2199-sketch/awesome-design-md-jp/tree/main/design-md/apple) の `DESIGN.md` (タイポグラフィ・カラー・ピル型 CTA・ナビすりガラス) に準拠しています。
+
+---
+
+## 運用上の注意
+
+### ⚠️ ワーカーは 1 インスタンス固定
+
+`ghidra-worker` はファイルシステムベースのキュー (`queue/pending/` → `processing/` → `done/`) を使うため、**複数ワーカーは未対応**です。
+
+```bash
+# これは非対応 (ジョブ競合発生)
+docker compose up -d --scale ghidra-worker=2
+```
+
+並列解析が必要な場合は arq / Celery + Redis などの真のジョブキューへ移行してください。
+
+### ⚠️ コード変更後のイメージ再ビルド
+
+| 変更箇所 | 再ビルド要否 |
+|---|---|
+| `app/backend/*.py` (`main.py` / `worker.py` / `annotator.py` 等) | **要再ビルド** |
+| `app/backend/requirements.txt` | **要再ビルド** |
+| `app/frontend/**` | **要再ビルド** |
+| `scripts/ghidra/auto_analyze.py` | **不要** (bind mount。`ghidra-worker` 再起動のみで反映) |
+
+```bash
+# 通常の再ビルド
+docker compose build backend ghidra-worker frontend
+docker compose up -d
+
+# レイヤーキャッシュを疑う場合
+docker compose build --no-cache backend ghidra-worker
+```
+
+> 「`git pull` 直後に挙動が変わらない」「PDF がまだ Ghidra に行く」等は、**未コミット / 未再ビルド / レイヤーキャッシュ** のいずれかが原因です。
+
+### ⚠️ プロジェクトルート `./input/` は使用しません
+
+旧構成の名残です。検体は Docker named volume `cyber_input` に格納されます。残存ファイルは削除して構いません。
+
+```bash
+# volume の中身を確認
+docker run --rm -v cyber-ghidra-webui-main_cyber_input:/data alpine ls -la /data
+```
+
+---
+
+## トラブルシューティング
+
+| 症状 | 確認ポイント |
+|---|---|
+| `8000` / `3001` ポート競合 | `docker compose down` 後、他プロセスを停止 |
+| Ghidra 解析がタイムアウトする | `GHIDRA_TIMEOUT_SEC` を延長 (大型検体は 1800 など) |
+| LLM 注釈が `connection refused` | `host.docker.internal` の到達性。Linux は `extra_hosts` 追加 |
+| `LLM_USE_JSON_MODE` で 400 | `LLM_USE_JSON_MODE=0` にフォールバック (古い OpenAI 互換 API は JSON モード未対応) |
+| AMD GPU が認識されない | `/dev/kfd` `/dev/dri` の権限、ROCm ドライバ、`HSA_OVERRIDE_GFX_VERSION` |
+| 静的スキャナーが空結果 | `python-magic` + `libmagic1` の存在、`requirements.txt` 変更後の再ビルド |
+
+---
+
+## 謝辞
+
+- [Ghidra](https://ghidra-sre.org/) — NSA Research Directorate
+- [Unipacker](https://github.com/unipacker/unipacker) — TU Wien
+- [capa](https://github.com/mandiant/capa) — Mandiant FLARE
+- [oletools](https://github.com/decalage2/oletools) — Philippe Lagadec
+- [pefile](https://github.com/erocarrera/pefile) — Ero Carrera
+- [LIEF](https://lief.re/) — Quarkslab
+- [androguard](https://github.com/androguard/androguard)
+- [binwalk](https://github.com/ReFirmLabs/binwalk)
+- [blacktop/ghidra](https://github.com/blacktop/docker-ghidra) Docker image
+- UI design: [awesome-design-md-jp / Apple Japan](https://github.com/matrix9neonebuchadnezzar2199-sketch/awesome-design-md-jp)
+
+---
+
+> **解析対象は必ず隔離環境 (FLARE-VM / REMnux / エアギャップ VM) で扱ってください。** 本ツールは研究・教育目的の解析ワークフロー支援を目的としています。
